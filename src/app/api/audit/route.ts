@@ -5,6 +5,7 @@
 import { NextRequest } from "next/server";
 import { runAudit } from "@/lib/audit/pipeline";
 import { saveAudit } from "@/lib/db/store";
+import { isSupabaseEnabled } from "@/lib/db/supabase";
 
 export const runtime = "nodejs";
 // 60s is the Vercel Hobby plan ceiling; real dealer-page audits finish in a few
@@ -31,6 +32,20 @@ export async function POST(req: NextRequest) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
 
       try {
+        // On serverless (Vercel) the filesystem is read-only and /tmp is
+        // per-instance, so audits would save but vanish on the next request
+        // ("Audit not found"). Require Supabase there and say so clearly.
+        const serverless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
+        if (serverless && !isSupabaseEnabled()) {
+          send({
+            type: "error",
+            error:
+              "Storage isn't configured for this deployment. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in your Vercel project's Environment Variables, then redeploy. (Check /api/health to verify.)",
+          });
+          controller.close();
+          return;
+        }
+
         const gen = runAudit(url, { reviewer, screenshot });
         let result = await gen.next();
         while (!result.done) {
