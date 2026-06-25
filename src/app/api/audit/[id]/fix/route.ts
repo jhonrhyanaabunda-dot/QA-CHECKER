@@ -6,7 +6,8 @@ import { getAudit } from "@/lib/db/store";
 import { generateAutoFix, fixesToMarkdown } from "@/lib/audit/autofix";
 
 export const runtime = "nodejs";
-export const maxDuration = 90;
+// Within the Vercel Hobby 60s ceiling (raise on Pro if needed).
+export const maxDuration = 60;
 
 export async function POST(
   _req: NextRequest,

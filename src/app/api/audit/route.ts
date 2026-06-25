@@ -7,7 +7,9 @@ import { runAudit } from "@/lib/audit/pipeline";
 import { saveAudit } from "@/lib/db/store";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+// 60s is the Vercel Hobby plan ceiling; real dealer-page audits finish in a few
+// seconds. Raise this on Vercel Pro (up to 300) if you audit very large pages.
+export const maxDuration = 60;
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
