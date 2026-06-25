@@ -8,15 +8,22 @@
 
 import type { Audit, AuditSummaryRow, ReviewChecklist } from "../audit/types";
 
+// Read the project URL from SUPABASE_URL first (a plain server env var read at
+// RUNTIME), falling back to NEXT_PUBLIC_SUPABASE_URL. The NEXT_PUBLIC_ value is
+// inlined at BUILD time, so on its own it fails if the var was added after the
+// build — SUPABASE_URL avoids that gotcha. Trailing slashes are stripped.
+function supabaseUrl(): string {
+  return (process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
+}
+
 export function isSupabaseEnabled(): boolean {
-  return Boolean(
-    process.env.NEXT_PUBLIC_SUPABASE_URL &&
-      process.env.SUPABASE_SERVICE_ROLE_KEY,
-  );
+  return Boolean(supabaseUrl() && process.env.SUPABASE_SERVICE_ROLE_KEY);
 }
 
 function base() {
-  return `${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1`;
+  return `${supabaseUrl()}/rest/v1`;
 }
 
 function headers(extra: Record<string, string> = {}) {

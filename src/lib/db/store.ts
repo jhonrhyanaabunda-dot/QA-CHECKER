@@ -9,6 +9,7 @@
 
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import type { Audit, AuditSummaryRow, ReviewChecklist } from "../audit/types";
 import {
   isSupabaseEnabled,
@@ -18,7 +19,19 @@ import {
   supabaseUpdateReview,
 } from "./supabase";
 
-const DATA_DIR = path.resolve(process.env.DATA_DIR || ".data");
+// Choose a writable data dir. On serverless platforms (Vercel / AWS Lambda) the
+// app directory is READ-ONLY — only the OS temp dir is writable — so we fall
+// back to /tmp there. This keeps the local JSON store from crashing when
+// Supabase isn't configured. (Note: /tmp is per-instance and ephemeral, so for
+// durable cross-deploy history configure Supabase — see ./supabase.ts.)
+function resolveDataDir(): string {
+  if (process.env.DATA_DIR) return path.resolve(process.env.DATA_DIR);
+  const serverless =
+    process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.NOW_REGION;
+  return serverless ? path.join(os.tmpdir(), "dealerqa-data") : path.resolve(".data");
+}
+
+const DATA_DIR = resolveDataDir();
 const DB_FILE = path.join(DATA_DIR, "audits.json");
 
 interface DbShape {
