@@ -22,6 +22,58 @@ export function isSupabaseEnabled(): boolean {
   return Boolean(supabaseUrl() && process.env.SUPABASE_SERVICE_ROLE_KEY);
 }
 
+/** Project host, for diagnostics. Never the key. */
+export function supabaseHost(): string | undefined {
+  try {
+    return new URL(supabaseUrl()).host;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Live reachability check. Having the env vars set says nothing about whether
+ * the project actually answers — a paused free-tier project keeps its vars and
+ * fails every request with a bare "fetch failed". This separates the cases:
+ *   network error -> project paused, deleted, or URL wrong
+ *   401/403       -> service role key wrong
+ *   404           -> schema.sql never applied (no `audits` table)
+ */
+export async function supabasePing(): Promise<{
+  ok: boolean;
+  status?: number;
+  error?: string;
+  hint?: string;
+}> {
+  if (!isSupabaseEnabled()) return { ok: false, error: "not configured" };
+  try {
+    const res = await fetch(`${base()}/audits?select=id&limit=1`, {
+      headers: headers(),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) return { ok: true, status: res.status };
+    const body = await res.text().catch(() => "");
+    return {
+      status: res.status,
+      ok: false,
+      error: body.slice(0, 200) || `HTTP ${res.status}`,
+      hint:
+        res.status === 404
+          ? "No `audits` table — apply src/lib/db/schema.sql in the Supabase SQL editor."
+          : res.status === 401 || res.status === 403
+            ? "SUPABASE_SERVICE_ROLE_KEY is wrong. Copy the service_role key (not anon) from Project Settings > API."
+            : undefined,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      error: (e as Error).message,
+      hint:
+        "Could not reach the project at all. A free-tier Supabase project auto-pauses after ~1 week idle; open the Supabase dashboard and Restore it. Otherwise check SUPABASE_URL is the Project URL (https://<ref>.supabase.co).",
+    };
+  }
+}
+
 function base() {
   return `${supabaseUrl()}/rest/v1`;
 }
