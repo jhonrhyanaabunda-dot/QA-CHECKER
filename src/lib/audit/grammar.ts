@@ -178,19 +178,20 @@ function similarity(a: string, b: string): number {
 export async function enrichWithLlm(paragraphs: string[]): Promise<ContentIssue[]> {
   if (!paragraphs.length) return [];
   const sample = paragraphs.slice(0, 30).map((p, i) => `[${i}] ${p}`).join("\n\n");
-  const result = await completeJson<{ issues: { paragraph: number; kind: string; severity: string; message: string; suggestion?: string }[] }>({
+  const result = await completeJson<{ issues: { paragraph: number; kind: string; severity: string; message: string; excerpt?: string; suggestion?: string }[] }>({
     system:
-      "You are a senior copy editor for automotive dealership content. Find grammar, spelling, awkward phrasing, and overly AI-generated tone. Be concise and only report real issues.",
+      "You are a QA fact-checker reviewing a dealership pillar page. The reviewer signs off on this content and is accountable for every sentence, so work one sentence at a time. Beyond grammar and spelling, your priority is paraphrase fidelity: flag any sentence whose rewrite changed the meaning of the source it came from - a dropped qualifier (\"up to\", \"on select trims\", \"with approved credit\"), a range collapsed into a single number, an EPA estimate stated as fact, or a manufacturer claim widened into a dealership promise. Never invent figures, prices, or URLs. Only report real issues.",
     prompt:
-      `Review these paragraphs and return JSON {"issues":[{"paragraph":<index>,"kind":"grammar|spelling|readability|ai_tone","severity":"warning|fail","message":"...","suggestion":"..."}]}. Max 12 issues.\n\n${sample}`,
+      `Review these paragraphs sentence by sentence and return JSON {"issues":[{"paragraph":<index>,"kind":"grammar|spelling|readability|ai_tone|paraphrase","severity":"warning|fail","message":"...","excerpt":"<the exact sentence>","suggestion":"<the corrected sentence>"}]}. Max 12 issues.\n\n${sample}`,
     maxTokens: 1200,
   });
   if (!result?.issues) return [];
   return result.issues.slice(0, 12).map((it) => ({
     id: genId("iss"),
-    kind: (["grammar", "spelling", "readability", "ai_tone", "keyword_stuffing", "repetition"].includes(it.kind) ? it.kind : "grammar") as ContentIssue["kind"],
+    kind: (["grammar", "spelling", "readability", "ai_tone", "keyword_stuffing", "repetition", "paraphrase"].includes(it.kind) ? it.kind : "grammar") as ContentIssue["kind"],
     severity: (it.severity === "fail" ? "fail" : "warning") as ContentIssue["severity"],
     message: it.message,
+    excerpt: it.excerpt,
     suggestion: it.suggestion,
   }));
 }

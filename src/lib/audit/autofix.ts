@@ -20,6 +20,11 @@ export interface FixChange {
   from: string;
   to: string;
   reason: string;
+  /**
+   * Reviewer-facing explanation: what the page says, what the authoritative
+   * source says, and why it matters. A bare "X → Y" isn't enough to sign off on.
+   */
+  analysis?: string;
   /** Dealer-site page the correct value came from, when applicable. */
   sourceUrl?: string;
 }
@@ -31,17 +36,168 @@ export interface ParagraphFix {
   changes: FixChange[];
 }
 
+export interface LinkAction {
+  url: string;
+  status: string;
+  action: string;
+  /** The corrected URL to swap in, when it is known. */
+  replacementUrl?: string;
+  analysis: string;
+  /** True when replacementUrl is known and the swap is safe to apply as-is. */
+  autoApplicable: boolean;
+}
+
+export interface RatingAction {
+  issue: string;
+  analysis: string;
+  /** Live Google profile to verify against. */
+  sourceUrl?: string;
+}
+
+export interface ConfirmationItem {
+  location: string;
+  issue: string;
+  analysis: string;
+  verifyUrl?: string;
+}
+
 export interface AutoFixResult {
   paragraphFixes: ParagraphFix[];
-  linkActions: { url: string; status: string; action: string }[];
-  ratingActions: string[];
-  needsConfirmation: { location: string; issue: string; verifyUrl?: string }[];
-  counts: { paragraphs: number; changes: number; links: number; manual: number };
+  linkActions: LinkAction[];
+  ratingActions: RatingAction[];
+  needsConfirmation: ConfirmationItem[];
+  counts: {
+    paragraphs: number;
+    changes: number;
+    links: number;
+    manual: number;
+    /** Fixes that can be applied without a human deciding anything. */
+    autoApplicable: number;
+  };
   generatedBy: string;
+}
+
+// ── Why each correction matters ────────────────────────────────────────────
+// The reviewer is personally accountable for every published sentence, so each
+// warning explains itself: what is on the page, what the source says, and the
+// risk of leaving it. These are deterministic — they hold with zero AI setup.
+
+const RISK: Record<FixChange["kind"], string> = {
+  fact: "Published vehicle figures are the highest-risk claims on a dealership page: a stale MPG, price or warranty number is both a customer-trust problem and an advertising-compliance exposure.",
+  offer: "Lease and finance figures expire. Publishing an offer that is no longer live invites a bait-and-switch complaint even when the figure was accurate the day it was written.",
+  compliance: "FTC advertising guidance requires an objective superlative to be substantiated at the moment it is published. Unsupported absolutes are the most common dealer-advertising violation.",
+  contact: "Inconsistent name, address or phone details break click-to-call and degrade local search ranking.",
+  spelling: "Spelling errors on a pillar page undermine credibility and are picked up by search quality raters.",
+  grammar: "Awkward or incorrect phrasing hurts readability and reads as unedited AI output.",
+};
+
+function analyzeChange(c: FixChange): string {
+  let head: string;
+  if (c.kind === "compliance")
+    head = `The page claims "${c.from}" — a superlative the content does not substantiate.`;
+  else if (c.kind === "spelling" || c.kind === "grammar")
+    head = `The page reads "${c.from}", which is incorrect.`;
+  else
+    head = `The page publishes "${c.from}", but the authoritative value is "${c.to}".`;
+  const src = c.sourceUrl ? ` Verify at ${c.sourceUrl}` : "";
+  return `${head} ${RISK[c.kind]} ${c.reason}. Applying this replaces "${c.from}" with "${c.to}".${src}`;
+}
+
+/** Attach an explanation to every change once the fixes are final. */
+function attachAnalysis(fixes: ParagraphFix[]): void {
+  for (const f of fixes) for (const c of f.changes) c.analysis = analyzeChange(c);
+}
+
+/** True when a redirect dumps a deep link on the bare site root (a soft 404). */
+function isSoftRootRedirect(from: string, to: string): boolean {
+  try {
+    const a = new URL(from);
+    const b = new URL(to);
+    const fromIsDeep = a.pathname.replace(/\/+$/, "") !== "";
+    const toIsRoot = b.pathname.replace(/\/+$/, "") === "" && !b.search;
+    return fromIsDeep && toIsRoot;
+  } catch {
+    return false;
+  }
+}
+
+/** Turn one failed/redirecting link into an action with its corrected URL. */
+function buildLinkAction(l: Audit["links"][number]): LinkAction {
+  const detail = l.error || `HTTP ${l.httpStatus ?? "error"}`;
+  if (l.status === "warning" && l.redirectedTo && isSoftRootRedirect(l.url, l.redirectedTo)) {
+    return {
+      url: l.url,
+      status: l.status,
+      action: "Replace this link — it no longer resolves to a real page.",
+      analysis: `This link redirects to ${l.redirectedTo}, the site root, rather than to a replacement for the page it was pointing at. That is a catch-all redirect standing in for a page that no longer exists, so the reader silently lands on the homepage instead of the content the sentence promised. Swapping the root URL in automatically would keep the link alive while destroying its meaning, so a real destination has to be chosen by hand.`,
+      autoApplicable: false,
+    };
+  }
+  if (l.status === "warning" && l.redirectedTo) {
+    return {
+      url: l.url,
+      status: l.status,
+      action: `Point this link directly at its final destination: ${l.redirectedTo}`,
+      replacementUrl: l.redirectedTo,
+      analysis: `This link only resolves after ${l.redirectChain ?? 1} redirect hop(s), ending at ${l.redirectedTo}. Redirect chains slow the page, dilute link equity, and break silently if the intermediate rule is ever removed. The final destination is already known, so this swap is safe to apply automatically.`,
+      autoApplicable: true,
+    };
+  }
+  if (l.status === "fail") {
+    return {
+      url: l.url,
+      status: l.status,
+      action: `Remove or replace this link (${detail}).`,
+      analysis: `This link does not resolve (${detail}). A dead link on a pillar page sends the reader nowhere and is a crawl-quality signal. No replacement can be inferred safely, so a destination has to be confirmed by hand before this one can be applied.`,
+      autoApplicable: false,
+    };
+  }
+  return {
+    url: l.url,
+    status: l.status,
+    action: "Review this link.",
+    analysis: `This link returned an unclean result (${detail}). Confirm the destination still supports the sentence linking to it.`,
+    autoApplicable: false,
+  };
+}
+
+/**
+ * The page content with the selected paragraph fixes applied — this is what
+ * "apply automatically" actually produces.
+ */
+export function buildCorrectedDocument(
+  allParagraphs: string[],
+  fixes: ParagraphFix[],
+  selected?: number[],
+): string {
+  const pick = selected ? new Set(selected) : null;
+  const byIndex = new Map(fixes.map((f) => [f.paragraphIndex, f]));
+  return allParagraphs
+    .map((p, i) => {
+      const f = byIndex.get(i);
+      if (!f || (pick && !pick.has(i))) return p;
+      return f.corrected;
+    })
+    .join("\n\n");
 }
 
 const tidy = (s: string) =>
   s.replace(/\s{2,}/g, " ").replace(/\s+([.,!?;:])/g, "$1").replace(/\(\s+/g, "(").trim();
+
+/**
+ * Repair prose after a phrase has been cut out of it: drop orphaned punctuation
+ * and re-capitalize sentence starts. Without this, removing a leading
+ * superlative leaves ". per year the longer you keep it." — which auto-apply
+ * would publish verbatim.
+ */
+function repairProse(s: string): string {
+  let out = tidy(s);
+  out = out.replace(/([.!?])\s*[,;:]/g, "$1");
+  out = out.replace(/\s+([.,!?;:])/g, "$1");
+  out = out.replace(/([.!?]\s+)([a-z])/g, (_m, punct: string, ch: string) => punct + ch.toUpperCase());
+  out = out.replace(/^\s*([a-z])/, (_m, ch: string) => ch.toUpperCase());
+  return tidy(out);
+}
 
 /** Remove/neutralize an unsupported superlative phrase. */
 function neutralizeCompliance(phrase: string): string {
@@ -191,7 +347,7 @@ function fixParagraph(
   for (const c of compliance) {
     if (corrected.includes(c.phrase)) {
       const replacement = neutralizeCompliance(c.phrase);
-      corrected = tidy(corrected.replace(c.phrase, replacement));
+      corrected = repairProse(corrected.replace(c.phrase, replacement));
       changes.push({
         kind: "compliance",
         from: c.phrase,
@@ -201,7 +357,7 @@ function fixParagraph(
     }
   }
 
-  corrected = tidy(corrected);
+  corrected = repairProse(corrected);
   if (!changes.length || corrected === p.content) return null;
   return { paragraphIndex: p.index, original: p.content, corrected, changes };
 }
@@ -216,7 +372,7 @@ async function llmPolish(fixes: ParagraphFix[]): Promise<void> {
   }));
   const result = await completeJson<{ fixes: { index: number; corrected: string }[] }>({
     system:
-      "You are a senior automotive copy editor. Apply the required changes to each paragraph and return clean, publish-ready text. Preserve meaning and tone; never invent facts, prices, or figures.",
+      "You are a senior automotive copy editor. Apply the required changes to each paragraph and return clean, publish-ready text. Preserve meaning and tone. Never invent facts, prices, figures, or URLs, and never drop a qualifier that limits a claim - keep \"up to\", \"on select trims\", \"with approved credit\", EPA-estimate wording, and any disclaimer exactly as written.",
     prompt:
       `Rewrite each paragraph applying its required changes. Return JSON {"fixes":[{"index":<n>,"corrected":"..."}]}.\n\n${JSON.stringify(payload)}`,
     maxTokens: 1800,
@@ -251,36 +407,32 @@ export async function generateAutoFix(audit: Audit): Promise<AutoFixResult> {
   }
 
   await llmPolish(paragraphFixes);
+  attachAnalysis(paragraphFixes);
 
   // Link actions
-  const linkActions = audit.links
+  const linkActions: LinkAction[] = audit.links
     .filter((l) => l.status !== "pass")
-    .map((l) => ({
-      url: l.url,
-      status: l.status,
-      action:
-        l.status === "fail"
-          ? `Remove or fix this link (${l.error || "broken"}).`
-          : `Point link directly at its final destination${l.redirectedTo ? `: ${l.redirectedTo}` : ""}.`,
-    }));
+    .map(buildLinkAction);
 
   // Rating actions — only when we couldn't resolve a correct rating value
   // (otherwise the correction shows inline in the paragraph fixes).
   const haveRatingValue = dealerValues.some((v) => v.type === "rating" || v.type === "review_count");
-  const ratingActions: string[] = [];
+  const ratingActions: RatingAction[] = [];
   if (!haveRatingValue) {
     for (const r of audit.ratings) {
       if (r.status === "pass") continue;
-      ratingActions.push(
-        `Confirm displayed ${r.displayedRating ?? "?"}★ / ${r.displayedReviewCount?.toLocaleString() ?? "?"} reviews against the live Google profile and update if stale.`,
-      );
+      ratingActions.push({
+        issue: `Displayed ${r.displayedRating ?? "?"}★ / ${r.displayedReviewCount?.toLocaleString() ?? "?"} reviews could not be confirmed.`,
+        analysis: `The page hard-codes a star rating and review count that could not be matched against the live Google Business Profile. Both figures drift daily, so a hard-coded number goes stale quietly and is one of the easiest claims for a customer to disprove. Confirm both against the live profile and update them, or remove the hard-coded numbers entirely.`,
+        sourceUrl: r.sourceUrl,
+      });
     }
   }
 
   // Anything still not corrected (the right value wasn't found on the dealer
   // site and there's no authoritative value) — send to the developer to confirm.
   const fixByIndex = new Map(paragraphFixes.map((f) => [f.paragraphIndex, f]));
-  const needsConfirmation: AutoFixResult["needsConfirmation"] = [];
+  const needsConfirmation: ConfirmationItem[] = [];
   for (const p of audit.paragraphs) {
     const applied = fixByIndex.get(p.index)?.changes ?? [];
     for (const c of p.claims) {
@@ -299,6 +451,12 @@ export async function generateAutoFix(audit: Audit): Promise<AutoFixResult> {
           (suggestion
             ? `${dealerName}'s site shows "${suggestion.value}"; confirm which figure this refers to before applying.`
             : `value not found on ${dealerName}'s site; confirm the current offer.`),
+        analysis:
+          `This ${c.type.replace(/_/g, " ")} figure is time-sensitive and no authoritative current value could be resolved` +
+          (suggestion
+            ? `; the closest match on ${dealerName}'s own site is "${suggestion.value}", which may refer to a different trim, term or model year.`
+            : `, and nothing matching it was found on ${dealerName}'s site.`) +
+          ` Auto-applying a figure here would swap one unverified number for another, so it is deliberately left for a human to confirm against the live source.`,
         verifyUrl: suggestion?.sourceUrl || c.sourceUrl,
       });
     }
@@ -315,6 +473,7 @@ export async function generateAutoFix(audit: Audit): Promise<AutoFixResult> {
       changes: changeCount,
       links: linkActions.length,
       manual: needsConfirmation.length,
+      autoApplicable: changeCount + linkActions.filter((l) => l.autoApplicable).length,
     },
     generatedBy: providerLabel(),
   };
@@ -339,7 +498,10 @@ export function fixesToMarkdown(audit: Audit, fix: AutoFixResult): string {
     for (const f of fix.paragraphFixes) {
       lines.push("");
       lines.push(`### Paragraph ${f.paragraphIndex + 1}`);
-      lines.push(`**Changes:** ${f.changes.map((c) => `${c.kind} ("${c.from}" → "${c.to}")${c.sourceUrl ? ` [source](${c.sourceUrl})` : ""}`).join("; ")}`);
+      for (const c of f.changes) {
+        lines.push(`- **${c.kind}:** \`${c.from}\` → \`${c.to}\`${c.sourceUrl ? ` · [verify source](${c.sourceUrl})` : ""}`);
+        if (c.analysis) lines.push(`  - _Analysis:_ ${c.analysis}`);
+      }
       lines.push("");
       lines.push(`**Before:**`);
       lines.push(`> ${f.original}`);
@@ -352,20 +514,31 @@ export function fixesToMarkdown(audit: Audit, fix: AutoFixResult): string {
 
   if (fix.linkActions.length) {
     lines.push(`## Link fixes`);
-    for (const l of fix.linkActions) lines.push(`- [ ] ${l.action}\n  - \`${l.url}\``);
+    for (const l of fix.linkActions) {
+      lines.push(`- [ ] ${l.action}${l.autoApplicable ? " _(auto-applied)_" : ""}`);
+      lines.push(`  - Current: \`${l.url}\``);
+      if (l.replacementUrl) lines.push(`  - Corrected: \`${l.replacementUrl}\``);
+      lines.push(`  - _Analysis:_ ${l.analysis}`);
+    }
     lines.push("");
   }
 
   if (fix.ratingActions.length) {
     lines.push(`## Rating / reviews`);
-    for (const r of fix.ratingActions) lines.push(`- [ ] ${r}`);
+    for (const r of fix.ratingActions) {
+      lines.push(`- [ ] ${r.issue}${r.sourceUrl ? ` · [live profile](${r.sourceUrl})` : ""}`);
+      lines.push(`  - _Analysis:_ ${r.analysis}`);
+    }
     lines.push("");
   }
 
   if (fix.needsConfirmation.length) {
     lines.push(`## Needs developer confirmation (no auto-fix — value not known)`);
-    for (const n of fix.needsConfirmation)
-      lines.push(`- [ ] **${n.location}:** ${n.issue}${n.verifyUrl ? `\n  - Verify: ${n.verifyUrl}` : ""}`);
+    for (const n of fix.needsConfirmation) {
+      lines.push(`- [ ] **${n.location}:** ${n.issue}`);
+      lines.push(`  - _Analysis:_ ${n.analysis}`);
+      if (n.verifyUrl) lines.push(`  - Verify: ${n.verifyUrl}`);
+    }
     lines.push("");
   }
 

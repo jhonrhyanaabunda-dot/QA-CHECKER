@@ -81,7 +81,8 @@ export interface ContentIssue {
     | "readability"
     | "ai_tone"
     | "keyword_stuffing"
-    | "repetition";
+    | "repetition"
+    | "paraphrase";
   severity: Status;
   message: string;
   excerpt?: string;

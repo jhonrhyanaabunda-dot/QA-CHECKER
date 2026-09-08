@@ -19,5 +19,8 @@ export async function POST(
 
   const result = await generateAutoFix(audit);
   const markdown = fixesToMarkdown(audit, result);
-  return Response.json({ result, markdown, title: audit.title });
+  // Every paragraph, so the panel can rebuild the corrected page as the
+  // reviewer toggles individual fixes on and off.
+  const allParagraphs = audit.paragraphs.map((p) => p.content);
+  return Response.json({ result, markdown, title: audit.title, allParagraphs });
 }
