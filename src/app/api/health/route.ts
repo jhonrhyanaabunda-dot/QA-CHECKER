@@ -3,7 +3,7 @@
 // survive on Vercel). No secrets are exposed — only booleans and the provider.
 
 import { isSupabaseEnabled, supabasePing, supabaseHost } from "@/lib/db/supabase";
-import { providerLabel, llmPing } from "@/lib/llm";
+import { providerLabel, llmPing, listGeminiModels } from "@/lib/llm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -12,7 +12,10 @@ export async function GET(req: Request) {
   // The LLM probe spends real quota (the Gemini free tier allows 20 requests a
   // minute), so it is opt-in: a monitor or a refresh loop hitting this endpoint
   // must not drain the budget the audits need. Use /api/health?llm=1.
-  const testLlm = new URL(req.url).searchParams.get("llm") === "1";
+  const params = new URL(req.url).searchParams;
+  const testLlm = params.get("llm") === "1";
+  // ?models=1 lists what this key can call — free quotas differ per model.
+  const wantModels = params.get("models") === "1";
   const serverless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME);
   const supabase = isSupabaseEnabled();
   // Configured != working. Actually call the project so a paused or
@@ -24,6 +27,7 @@ export async function GET(req: Request) {
   const llm = testLlm ? await llmPing() : null;
   // JSON mode is what every real caller uses, so probe it separately.
   const llmJson = llm?.ok ? await llmPing({ json: true }) : null;
+  const modelList = wantModels ? await listGeminiModels() : null;
   return Response.json({
     ok: true,
     serverless,
@@ -51,6 +55,8 @@ export async function GET(req: Request) {
     llmReachable: llm ? llm.ok : undefined,
     llmError: llm && !llm.ok ? llm.error : undefined,
     llmNote: testLlm ? undefined : "add ?llm=1 to actually call the provider (spends quota)",
+    geminiModels: modelList?.models,
+    geminiModelsError: modelList?.error,
     llmJsonOk: llmJson ? llmJson.ok : undefined,
     llmJsonError: llmJson && !llmJson.ok ? llmJson.error : undefined,
     note: serverless && !supabase

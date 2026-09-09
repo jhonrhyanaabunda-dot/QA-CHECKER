@@ -87,6 +87,33 @@ export async function llmPing(opts: { json?: boolean } = {}): Promise<{
   }
 }
 
+/**
+ * List the models this key can actually call. Free-tier quotas differ sharply
+ * per model, so when one is exhausted this says which alternatives exist.
+ * ListModels is a metadata call and does not spend generate_content quota.
+ */
+export async function listGeminiModels(): Promise<{ models?: string[]; error?: string }> {
+  const key = process.env.GEMINI_API_KEY;
+  if (!key) return { error: "no GEMINI_API_KEY" };
+  try {
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${key}&pageSize=100`,
+      { signal: AbortSignal.timeout(15_000) },
+    );
+    const body = await res.text();
+    if (!res.ok) return { error: `ListModels ${res.status}: ${body.slice(0, 300)}` };
+    const data = JSON.parse(body);
+    const models: string[] = (data.models ?? [])
+      .filter((m: { supportedGenerationMethods?: string[] }) =>
+        (m.supportedGenerationMethods ?? []).includes("generateContent"),
+      )
+      .map((m: { name: string }) => m.name.replace(/^models\//, ""));
+    return { models };
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+}
+
 /** complete + parse JSON, surfacing the failure reason instead of just null. */
 export async function completeJsonDetailed<T>(
   req: LlmRequest,
