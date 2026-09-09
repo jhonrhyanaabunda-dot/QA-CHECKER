@@ -11,6 +11,34 @@ import type { LinkCheck } from "./types";
 const UA = "DealerQA-AI/0.1 (+link-checker)";
 const CONCURRENCY = 8;
 
+/**
+ * Cheap liveness check for a single URL. Used to verify sources a model
+ * supplies: told not to invent URLs it still does, and a citation the reviewer
+ * cannot open is worse than no citation at all.
+ */
+export async function urlResolves(url: string): Promise<boolean> {
+  try {
+    const p = new URL(url);
+    if (!/^https?:$/.test(p.protocol)) return false;
+  } catch {
+    return false;
+  }
+  const doFetch = (method: "HEAD" | "GET") =>
+    fetch(url, {
+      method,
+      headers: { "user-agent": UA, accept: "*/*" },
+      redirect: "follow",
+      signal: AbortSignal.timeout(10_000),
+    });
+  try {
+    let res = await doFetch("HEAD");
+    if (res.status === 405 || res.status === 403 || res.status === 501) res = await doFetch("GET");
+    return res.status < 400;
+  } catch {
+    return false;
+  }
+}
+
 async function checkOne(link: { url: string; text: string }): Promise<LinkCheck> {
   const base: LinkCheck = {
     id: genId("link"),

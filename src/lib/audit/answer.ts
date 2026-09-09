@@ -10,6 +10,7 @@
 // ───────────────────────────────────────────────────────────────────────────
 
 import { completeJsonDetailed, activeProvider } from "../llm";
+import { urlResolves } from "./link-check";
 import type { Claim, ClaimAnswer, ClaimType } from "./types";
 
 /** Cap the work so one pathological page can't blow the function timeout. */
@@ -116,6 +117,31 @@ async function askBatch(
 }
 
 /**
+ * Drop cited sources that do not resolve. The instruction not to invent URLs
+ * is not enough on its own — observed output cited vw.com pages that 404 — and
+ * a dead citation is worse than none, because it looks verified.
+ */
+async function verifySources(claims: Claim[]): Promise<void> {
+  const urls = [
+    ...new Set(claims.map((c) => c.answer?.sourceUrl).filter((u): u is string => !!u)),
+  ];
+  if (!urls.length) return;
+  const live = new Map<string, boolean>();
+  await Promise.all(
+    urls.map(async (u) => {
+      live.set(u, await urlResolves(u));
+    }),
+  );
+  for (const c of claims) {
+    const a = c.answer;
+    if (!a?.sourceUrl || live.get(a.sourceUrl)) continue;
+    a.basis = `${a.basis} (The cited source did not resolve and was removed — confirm against ${SOURCE_HINT[c.type]}.)`;
+    a.sourceUrl = undefined;
+    a.confidence = Math.min(a.confidence, 0.4);
+  }
+}
+
+/**
  * Attach an answer to every unresolved claim. Mutates the claims in place —
  * the pipeline re-attaches these same objects to their paragraphs.
  */
@@ -163,4 +189,6 @@ export async function answerUnresolvedClaims(
       };
     }
   }
+
+  await verifySources(targets);
 }
