@@ -3,7 +3,7 @@
 // survive on Vercel). No secrets are exposed — only booleans and the provider.
 
 import { isSupabaseEnabled, supabasePing, supabaseHost } from "@/lib/db/supabase";
-import { providerLabel } from "@/lib/llm";
+import { providerLabel, llmPing } from "@/lib/llm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +15,9 @@ export async function GET() {
   // mis-keyed database is visible here instead of surfacing as a bare
   // "fetch failed" when someone runs an audit.
   const ping = supabase ? await supabasePing() : null;
+  // Same reasoning as the Supabase probe: "a provider is configured" says
+  // nothing about whether calls to it actually succeed.
+  const llm = await llmPing();
   return Response.json({
     ok: true,
     serverless,
@@ -39,6 +42,8 @@ export async function GET() {
         ? "ephemeral-tmp (NOT durable)"
         : "local-file",
     llm: providerLabel(),
+    llmReachable: llm.ok,
+    llmError: llm.ok ? undefined : llm.error,
     note: serverless && !supabase
       ? "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel, then REDEPLOY."
       : undefined,

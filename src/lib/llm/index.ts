@@ -52,6 +52,34 @@ export async function complete(req: LlmRequest): Promise<string | null> {
   }
 }
 
+/**
+ * Live provider check. `complete` deliberately swallows failures so callers can
+ * fall back to rule-based logic, which means a broken key or a bad model name
+ * is invisible. This surfaces the actual error for diagnostics.
+ */
+export async function llmPing(): Promise<{
+  ok: boolean;
+  provider: Provider;
+  error?: string;
+}> {
+  const provider = activeProvider();
+  if (provider === "rules") return { ok: false, provider, error: "no provider configured" };
+  const req: LlmRequest = { prompt: "Reply with exactly: ok", maxTokens: 16 };
+  try {
+    const text =
+      provider === "anthropic"
+        ? await callAnthropic(req)
+        : provider === "openai"
+          ? await callOpenAI(req)
+          : await callGemini(req);
+    return text
+      ? { ok: true, provider }
+      : { ok: false, provider, error: "provider returned an empty response" };
+  } catch (e) {
+    return { ok: false, provider, error: (e as Error).message };
+  }
+}
+
 /** Convenience: complete + parse JSON, returning null on any failure. */
 export async function completeJson<T>(req: LlmRequest): Promise<T | null> {
   const raw = await complete({ ...req, json: true });
@@ -145,7 +173,10 @@ async function callGemini(req: LlmRequest): Promise<string | null> {
     }),
     signal: AbortSignal.timeout(45_000),
   });
-  if (!res.ok) throw new Error(`Gemini ${res.status}`);
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Gemini ${res.status}: ${body.slice(0, 300)}`);
+  }
   const data = await res.json();
   return data.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
 }
