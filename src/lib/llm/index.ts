@@ -70,10 +70,13 @@ export async function llmPing(opts: { json?: boolean; model?: string } = {}): Pr
   const req: LlmRequest = opts.json
     ? {
         ...base,
-        system: "You are a test harness.",
-        prompt: 'Return JSON {"answers":[{"id":"a","answer":"ok"}]}',
+        system:
+          "You are a QA fact-checker for dealership content. Answer each item with the correct figure, the model year and trim it applies to, and the condition attached to it. Never invent a URL.",
+        prompt:
+          'Answer each item. Return JSON {"answers":[{"id":"a","answer":"...","basis":"...","confidence":0.5,"unresolved":false}]}. ' +
+          JSON.stringify([{ id: "a", type: "mpg", published_value: "36 mpg", sentence: "The 2024 Volkswagen Jetta gets 36 mpg highway." }]),
         json: true,
-        maxTokens: 200,
+        maxTokens: 3000,
       }
     : { ...base, prompt: "Reply with exactly: ok", maxTokens: 16 };
   try {
@@ -250,6 +253,12 @@ async function callGemini(req: LlmRequest, attempt = 0): Promise<string | null> 
       generationConfig: {
         temperature: req.temperature ?? 0.2,
         maxOutputTokens: req.maxTokens ?? 1500,
+        // Gemini 2.5+ spends "thinking" tokens out of maxOutputTokens. On a
+        // structured request the reasoning can consume the entire budget and
+        // return a candidate with no text part at all (finishReason
+        // MAX_TOKENS) — which is exactly how every answer came back empty.
+        // We want the answer, not the reasoning trace.
+        thinkingConfig: { thinkingBudget: 0 },
         ...(req.json ? { responseMimeType: "application/json" } : {}),
       },
     }),
