@@ -24,9 +24,11 @@ export async function GET(req: Request) {
   const ping = supabase ? await supabasePing() : null;
   // Same reasoning as the Supabase probe: "a provider is configured" says
   // nothing about whether calls to it actually succeed.
-  const llm = testLlm ? await llmPing() : null;
+  // ?model=<name> probes an alternative model (quota is per-model).
+  const modelOverride = params.get("model") || undefined;
+  const llm = testLlm ? await llmPing({ model: modelOverride }) : null;
   // JSON mode is what every real caller uses, so probe it separately.
-  const llmJson = llm?.ok ? await llmPing({ json: true }) : null;
+  const llmJson = llm?.ok ? await llmPing({ json: true, model: modelOverride }) : null;
   const modelList = wantModels ? await listGeminiModels() : null;
   return Response.json({
     ok: true,
@@ -52,6 +54,7 @@ export async function GET(req: Request) {
         ? "ephemeral-tmp (NOT durable)"
         : "local-file",
     llm: providerLabel(),
+    llmModelProbed: modelOverride,
     llmReachable: llm ? llm.ok : undefined,
     llmError: llm && !llm.ok ? llm.error : undefined,
     llmNote: testLlm ? undefined : "add ?llm=1 to actually call the provider (spends quota)",

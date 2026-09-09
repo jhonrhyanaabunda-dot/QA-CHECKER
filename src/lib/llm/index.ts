@@ -20,6 +20,8 @@ export interface LlmRequest {
   json?: boolean;
   maxTokens?: number;
   temperature?: number;
+  /** Override the configured model (diagnostics: probing an alternative). */
+  model?: string;
 }
 
 export function activeProvider(): Provider {
@@ -57,21 +59,23 @@ export async function complete(req: LlmRequest): Promise<string | null> {
  * fall back to rule-based logic, which means a broken key or a bad model name
  * is invisible. This surfaces the actual error for diagnostics.
  */
-export async function llmPing(opts: { json?: boolean } = {}): Promise<{
+export async function llmPing(opts: { json?: boolean; model?: string } = {}): Promise<{
   ok: boolean;
   provider: Provider;
   error?: string;
 }> {
   const provider = activeProvider();
   if (provider === "rules") return { ok: false, provider, error: "no provider configured" };
+  const base: Partial<LlmRequest> = opts.model ? { model: opts.model } : {};
   const req: LlmRequest = opts.json
     ? {
+        ...base,
         system: "You are a test harness.",
         prompt: 'Return JSON {"answers":[{"id":"a","answer":"ok"}]}',
         json: true,
         maxTokens: 200,
       }
-    : { prompt: "Reply with exactly: ok", maxTokens: 16 };
+    : { ...base, prompt: "Reply with exactly: ok", maxTokens: 16 };
   try {
     const text =
       provider === "anthropic"
@@ -233,7 +237,7 @@ async function callOpenAI(req: LlmRequest): Promise<string | null> {
 
 // ── Google Gemini ──────────────────────────────────────────────────────────
 async function callGemini(req: LlmRequest, attempt = 0): Promise<string | null> {
-  const model = process.env.GEMINI_MODEL || "gemini-3.6-flash";
+  const model = req.model || process.env.GEMINI_MODEL || "gemini-3.6-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
   const res = await fetch(url, {
     method: "POST",
