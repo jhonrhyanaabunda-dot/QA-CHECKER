@@ -21,7 +21,7 @@ import { ScoreRing } from "@/components/score-ring";
 import { AutoFixPanel } from "@/components/auto-fix-panel";
 import { cn, formatDate, scoreColor } from "@/lib/utils";
 import type {
-  Audit, Claim, ContentIssue, ParagraphAudit, ReviewChecklist, Status,
+  Audit, Claim, ClaimAnswer, ContentIssue, ParagraphAudit, ReviewChecklist, Status,
 } from "@/lib/audit/types";
 
 const TABS = [
@@ -308,6 +308,7 @@ function ClaimRow({ claim }: { claim: Claim }) {
         <span className="ml-auto text-xs text-muted-foreground">conf {Math.round(claim.confidence * 100)}%</span>
       </div>
       <p className="mt-2 text-sm text-muted-foreground">{claim.verification}</p>
+      {claim.answer && <ClaimAnswerBlock answer={claim.answer} />}
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
         {claim.officialValue && (
           <span>Official: <b>{claim.officialValue}</b></span>
@@ -322,6 +323,43 @@ function ClaimRow({ claim }: { claim: Claim }) {
         )}
         {claim.sourceUrl && <SourceLink label={claim.source || "source"} url={claim.sourceUrl} />}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The resolution for a warning the automated checks could not settle. An
+ * admitted gap is rendered differently from a real answer so the reviewer is
+ * never left thinking a "could not determine" is a verified figure.
+ */
+function ClaimAnswerBlock({ answer }: { answer: ClaimAnswer }) {
+  return (
+    <div
+      className={cn(
+        "mt-2 rounded-md border-l-2 p-2",
+        answer.unresolved ? "border-warning bg-warning/5" : "border-primary bg-primary/5",
+      )}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={cn(
+            "text-[11px] font-semibold uppercase tracking-wide",
+            answer.unresolved ? "text-warning" : "text-primary",
+          )}
+        >
+          {answer.unresolved ? "Needs a human" : "Answer"}
+        </span>
+        <span className="ml-auto text-[11px] text-muted-foreground">
+          conf {Math.round(answer.confidence * 100)}%
+        </span>
+      </div>
+      <p className="mt-1 text-sm">{answer.answer}</p>
+      <p className="mt-1 text-xs text-muted-foreground">{answer.basis}</p>
+      {answer.sourceUrl && (
+        <div className="mt-1.5 text-xs">
+          <SourceLink label="verify" url={answer.sourceUrl} />
+        </div>
+      )}
     </div>
   );
 }

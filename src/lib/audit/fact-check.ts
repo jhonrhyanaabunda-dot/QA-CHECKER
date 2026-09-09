@@ -132,7 +132,9 @@ async function verifyMpg(claim: Claim): Promise<Claim> {
 }
 
 async function verifyVehicle(claim: Claim, dealer?: Dealership): Promise<Claim> {
-  const veh = parseVehicle(claim.value || claim.text);
+  // The value is just a figure ("3,500 pounds") and never names a vehicle, so
+  // fall through to the surrounding sentence, which usually does.
+  const veh = parseVehicle(claim.value || "") || parseVehicle(claim.text);
   if (!veh) {
     return { ...claim, status: "warning", confidence: 0.4, verification: "No resolvable vehicle reference to validate." };
   }

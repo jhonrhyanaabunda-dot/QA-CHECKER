@@ -17,6 +17,7 @@ import { verifyClaim } from "./fact-check";
 import { checkLinks } from "./link-check";
 import { checkCompliance } from "./compliance";
 import { analyzeContent, enrichWithLlm } from "./grammar";
+import { answerUnresolvedClaims } from "./answer";
 import { checkRatings } from "./ratings";
 import { computeScore, paragraphStatus } from "./scoring";
 import type {
@@ -90,6 +91,14 @@ export async function* runAudit(
   const verifiedPageClaims = await mapLimit(pageLevelClaims, 6, (c) =>
     verifyClaim(c, dealership),
   );
+
+  // ── Answers ──────────────────────────────────────────────────────────────
+  // A warning the verifiers could not settle is useless to a reviewer on its
+  // own. Answer those: what the right figure is, and what that rests on.
+  yield { step: "answer", label: "Answering unresolved warnings…", progress: 50 };
+  await answerUnresolvedClaims([...verifiedParagraphClaims, ...verifiedPageClaims], {
+    dealerName: dealership?.name,
+  });
 
   // ── Links ────────────────────────────────────────────────────────────────
   // Cap at MAX_LINKS so a pathological page (e.g. a wiki with 1000+ links) can't

@@ -160,7 +160,7 @@ export function detectClaims(text: string): RawClaim[] {
 
   // Vehicle spec (horsepower, towing, seating, range)
   for (const m of text.matchAll(
-    /(\d{2,4})\s*(?:hp|horsepower|lb-?ft|lbs?\s+towing|pounds|mile\s+range|seats?)/gi,
+    /\b(\d{1,3}(?:,\d{3})+|\d{2,4})\s*(?:hp|horsepower|lb-?ft|lbs?\s+towing|pounds|mile\s+range|seats?)/gi,
   )) {
     push({ type: "vehicle_spec", text: context(text, m.index ?? 0, m[0].length), value: m[0].trim() });
   }

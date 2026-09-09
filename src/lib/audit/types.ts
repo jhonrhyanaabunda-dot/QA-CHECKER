@@ -35,6 +35,22 @@ export type ClaimType =
   | "phone"
   | "statistic";
 
+/**
+ * An answer for a claim the deterministic checks could not settle, so a warning
+ * comes with a resolution instead of a dead end.
+ */
+export interface ClaimAnswer {
+  /** The direct answer: is the published figure right, and what is right. */
+  answer: string;
+  /** What the answer rests on. */
+  basis: string;
+  /** Authoritative page, only when it is a real URL. */
+  sourceUrl?: string;
+  confidence: number; // 0-1
+  /** True when it genuinely could not be determined — never a guess. */
+  unresolved: boolean;
+}
+
 /** A single detected factual claim with its verification outcome. */
 export interface Claim {
   id: string;
@@ -58,6 +74,8 @@ export interface Claim {
   /** Direct, clickable URL to the authoritative source for verification. */
   sourceUrl?: string;
   sourceMissing?: boolean;
+  /** Resolution for a claim the deterministic checks left unanswered. */
+  answer?: ClaimAnswer;
 }
 
 /** One paragraph in the paragraph-by-paragraph audit. */

@@ -23,10 +23,10 @@ export function auditToCsv(audit: Audit): string {
         c.status,
         c.type,
         c.value || c.text.slice(0, 80),
-        c.verification,
+        c.verification + (c.answer ? ` | ANSWER: ${c.answer.answer} (${c.answer.basis})` : ""),
         c.suggestedCorrection || "",
         c.source || "",
-        c.sourceUrl || "",
+        c.sourceUrl || c.answer?.sourceUrl || "",
         String(c.confidence),
       ]);
     }
