@@ -12,8 +12,14 @@
 import { completeJson, activeProvider } from "../llm";
 import type { Claim, ClaimAnswer, ClaimType } from "./types";
 
-/** Cap the batch so one pathological page can't blow the function timeout. */
-const MAX_ANSWERS = 25;
+/** Cap the work so one pathological page can't blow the function timeout. */
+const MAX_ANSWERS = 24;
+/**
+ * Items per request. One big request truncates: the model hits the output cap
+ * mid-JSON, the parse fails, and every answer is silently lost. Small batches
+ * keep each response comfortably inside the limit.
+ */
+const BATCH = 6;
 
 /** Where the answer for each claim type actually lives. */
 const SOURCE_HINT: Record<ClaimType, string> = {
@@ -48,32 +54,27 @@ interface LlmAnswer {
   unresolved?: boolean;
 }
 
-function fallback(c: Claim): ClaimAnswer {
+/**
+ * Why no answer came back. These have to be distinguishable: "nothing is
+ * configured" and "the model was asked and returned nothing" need different
+ * fixes, and a message that blames the wrong one sends the reviewer hunting in
+ * the wrong place.
+ */
+function fallback(c: Claim, reason: "no-provider" | "no-response"): ClaimAnswer {
   return {
-    answer: "Not answered automatically — no AI provider is configured.",
+    answer:
+      reason === "no-provider"
+        ? "Not answered automatically — no AI provider is configured."
+        : "The AI check ran but returned no answer for this claim.",
     basis: `Check "${c.value ?? c.text.slice(0, 60)}" against ${SOURCE_HINT[c.type]}.`,
     confidence: 0,
     unresolved: true,
   };
 }
 
-/**
- * Attach an answer to every unresolved claim. Mutates the claims in place —
- * the pipeline re-attaches these same objects to their paragraphs.
- */
-export async function answerUnresolvedClaims(
-  claims: Claim[],
-  ctx: { dealerName?: string } = {},
-): Promise<void> {
-  const targets = claims.filter(isUnresolved).slice(0, MAX_ANSWERS);
-  if (!targets.length) return;
-
-  if (activeProvider() === "rules") {
-    for (const c of targets) c.answer = fallback(c);
-    return;
-  }
-
-  const payload = targets.map((c) => ({
+/** Ask for one batch. Returns answers by claim id; empty map on any failure. */
+async function askBatch(batch: Claim[]): Promise<Map<string, LlmAnswer>> {
+  const payload = batch.map((c) => ({
     id: c.id,
     type: c.type,
     published_value: c.value ?? "",
@@ -89,25 +90,50 @@ export async function answerUnresolvedClaims(
       "Never invent, guess or approximate a URL. Only give sourceUrl when you are confident a page exists at exactly that address; otherwise omit the field entirely. If you cannot determine the answer, set unresolved to true and say what the reviewer should check instead — never fill the gap with a plausible-sounding number. A wrong figure stated confidently is far worse than an admitted gap.",
     prompt:
       `Answer each item. Return JSON {"answers":[{"id":"<id>","answer":"...","basis":"...","sourceUrl":"...","confidence":0.0,"unresolved":false}]}. ` +
-      `"answer" is the direct answer in at most two sentences. "basis" is what it rests on. "confidence" is 0-1.\n\n` +
+      `"answer" is the direct answer in at most two sentences. "basis" is what it rests on. "confidence" is 0-1. ` +
+      `Return one entry for every id given.\n\n` +
       JSON.stringify(payload),
-    maxTokens: 2500,
+    maxTokens: 1800,
   });
 
-  const byId = new Map((result?.answers ?? []).map((a) => [a.id, a]));
-  for (const c of targets) {
-    const a = byId.get(c.id);
-    if (!a || !a.answer) {
-      c.answer = fallback(c);
-      continue;
+  return new Map((result?.answers ?? []).filter((a) => a?.id).map((a) => [a.id, a]));
+}
+
+/**
+ * Attach an answer to every unresolved claim. Mutates the claims in place —
+ * the pipeline re-attaches these same objects to their paragraphs.
+ */
+export async function answerUnresolvedClaims(
+  claims: Claim[],
+  ctx: { dealerName?: string } = {},
+): Promise<void> {
+  void ctx;
+  const targets = claims.filter(isUnresolved).slice(0, MAX_ANSWERS);
+  if (!targets.length) return;
+
+  if (activeProvider() === "rules") {
+    for (const c of targets) c.answer = fallback(c, "no-provider");
+    return;
+  }
+
+  for (let i = 0; i < targets.length; i += BATCH) {
+    const batch = targets.slice(i, i + BATCH);
+    const answers = await askBatch(batch);
+    for (const c of batch) {
+      const a = answers.get(c.id);
+      if (!a || !a.answer) {
+        c.answer = fallback(c, "no-response");
+        continue;
+      }
+      c.answer = {
+        answer: a.answer,
+        basis: a.basis || `Checked against ${SOURCE_HINT[c.type]}.`,
+        // Only keep a source we can actually treat as a link.
+        sourceUrl: /^https?:\/\//i.test(a.sourceUrl ?? "") ? a.sourceUrl : undefined,
+        confidence:
+          typeof a.confidence === "number" ? Math.min(1, Math.max(0, a.confidence)) : 0.5,
+        unresolved: Boolean(a.unresolved),
+      };
     }
-    c.answer = {
-      answer: a.answer,
-      basis: a.basis || `Checked against ${SOURCE_HINT[c.type]}.`,
-      // Only keep a source we can actually treat as a link.
-      sourceUrl: /^https?:\/\//i.test(a.sourceUrl ?? "") ? a.sourceUrl : undefined,
-      confidence: typeof a.confidence === "number" ? Math.min(1, Math.max(0, a.confidence)) : 0.5,
-      unresolved: Boolean(a.unresolved),
-    };
   }
 }
