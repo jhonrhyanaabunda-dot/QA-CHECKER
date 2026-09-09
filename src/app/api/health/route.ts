@@ -18,6 +18,8 @@ export async function GET() {
   // Same reasoning as the Supabase probe: "a provider is configured" says
   // nothing about whether calls to it actually succeed.
   const llm = await llmPing();
+  // JSON mode is what every real caller uses, so probe it separately.
+  const llmJson = llm.ok ? await llmPing({ json: true }) : null;
   return Response.json({
     ok: true,
     serverless,
@@ -44,6 +46,8 @@ export async function GET() {
     llm: providerLabel(),
     llmReachable: llm.ok,
     llmError: llm.ok ? undefined : llm.error,
+    llmJsonOk: llmJson ? llmJson.ok : undefined,
+    llmJsonError: llmJson && !llmJson.ok ? llmJson.error : undefined,
     note: serverless && !supabase
       ? "Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in Vercel, then REDEPLOY."
       : undefined,

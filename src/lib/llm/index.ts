@@ -57,14 +57,21 @@ export async function complete(req: LlmRequest): Promise<string | null> {
  * fall back to rule-based logic, which means a broken key or a bad model name
  * is invisible. This surfaces the actual error for diagnostics.
  */
-export async function llmPing(): Promise<{
+export async function llmPing(opts: { json?: boolean } = {}): Promise<{
   ok: boolean;
   provider: Provider;
   error?: string;
 }> {
   const provider = activeProvider();
   if (provider === "rules") return { ok: false, provider, error: "no provider configured" };
-  const req: LlmRequest = { prompt: "Reply with exactly: ok", maxTokens: 16 };
+  const req: LlmRequest = opts.json
+    ? {
+        system: "You are a test harness.",
+        prompt: 'Return JSON {"answers":[{"id":"a","answer":"ok"}]}',
+        json: true,
+        maxTokens: 200,
+      }
+    : { prompt: "Reply with exactly: ok", maxTokens: 16 };
   try {
     const text =
       provider === "anthropic"
@@ -178,5 +185,14 @@ async function callGemini(req: LlmRequest): Promise<string | null> {
     throw new Error(`Gemini ${res.status}: ${body.slice(0, 300)}`);
   }
   const data = await res.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? null;
+  const cand = data.candidates?.[0];
+  const parts: { text?: string }[] = cand?.content?.parts ?? [];
+  const text = parts.map((p) => p?.text ?? "").join("").trim();
+  if (!text) {
+    // Say why rather than returning null into a silent rule-based fallback.
+    const reason =
+      cand?.finishReason || data.promptFeedback?.blockReason || "no text part in response";
+    throw new Error(`Gemini returned no text (${reason})`);
+  }
+  return text;
 }
