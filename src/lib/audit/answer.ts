@@ -117,6 +117,9 @@ export async function answerUnresolvedClaims(
   }
 
   for (let i = 0; i < targets.length; i += BATCH) {
+    // Free-tier keys limit requests per minute; a small gap between batches
+    // costs a second and avoids losing a whole batch to a 429.
+    if (i > 0) await new Promise((r) => setTimeout(r, 1200));
     const batch = targets.slice(i, i + BATCH);
     const answers = await askBatch(batch);
     for (const c of batch) {

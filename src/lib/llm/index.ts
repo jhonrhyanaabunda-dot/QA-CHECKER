@@ -161,7 +161,7 @@ async function callOpenAI(req: LlmRequest): Promise<string | null> {
 }
 
 // ── Google Gemini ──────────────────────────────────────────────────────────
-async function callGemini(req: LlmRequest): Promise<string | null> {
+async function callGemini(req: LlmRequest, attempt = 0): Promise<string | null> {
   const model = process.env.GEMINI_MODEL || "gemini-3.6-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
   const res = await fetch(url, {
@@ -182,7 +182,15 @@ async function callGemini(req: LlmRequest): Promise<string | null> {
   });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`Gemini ${res.status}: ${body.slice(0, 300)}`);
+    // Free-tier keys rate-limit on bursts. The API tells us how long to wait,
+    // so honour it once rather than dropping the whole batch of answers.
+    if (res.status === 429 && attempt < 1) {
+      const m = body.match(/"retryDelay"\s*:\s*"(\d+)(?:\.\d+)?s"/);
+      const waitMs = Math.min(8000, Math.max(1000, (m ? Number(m[1]) : 5) * 1000));
+      await new Promise((r) => setTimeout(r, waitMs));
+      return callGemini(req, attempt + 1);
+    }
+    throw new Error(`Gemini ${res.status}: ${body.slice(0, 600)}`);
   }
   const data = await res.json();
   const cand = data.candidates?.[0];
