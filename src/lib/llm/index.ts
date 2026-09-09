@@ -34,7 +34,7 @@ export function providerLabel(): string {
   const p = activeProvider();
   if (p === "anthropic") return `Claude (${process.env.ANTHROPIC_MODEL || "claude-opus-4-8"})`;
   if (p === "openai") return `OpenAI (${process.env.OPENAI_MODEL || "gpt-4o"})`;
-  if (p === "gemini") return `Gemini (${process.env.GEMINI_MODEL || "gemini-2.0-flash"})`;
+  if (p === "gemini") return `Gemini (${process.env.GEMINI_MODEL || "gemini-3.6-flash"})`;
   return "Rule-based (no LLM key configured)";
 }
 
@@ -155,7 +155,7 @@ async function callOpenAI(req: LlmRequest): Promise<string | null> {
 
 // ── Google Gemini ──────────────────────────────────────────────────────────
 async function callGemini(req: LlmRequest): Promise<string | null> {
-  const model = process.env.GEMINI_MODEL || "gemini-2.0-flash";
+  const model = process.env.GEMINI_MODEL || "gemini-3.6-flash";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${process.env.GEMINI_API_KEY}`;
   const res = await fetch(url, {
     method: "POST",
