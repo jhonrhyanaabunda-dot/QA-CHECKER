@@ -9,7 +9,7 @@
 // authoritative source settles this claim type) rather than a dead end.
 // ───────────────────────────────────────────────────────────────────────────
 
-import { completeJson, activeProvider } from "../llm";
+import { completeJsonDetailed, activeProvider } from "../llm";
 import type { Claim, ClaimAnswer, ClaimType } from "./types";
 
 /** Cap the work so one pathological page can't blow the function timeout. */
@@ -19,7 +19,13 @@ const MAX_ANSWERS = 24;
  * mid-JSON, the parse fails, and every answer is silently lost. Small batches
  * keep each response comfortably inside the limit.
  */
-const BATCH = 6;
+const BATCH = 10;
+/**
+ * The answer pass shares a 60s serverless budget with the rest of the audit,
+ * so it stops waiting on rate limits past this point and reports the remaining
+ * claims honestly instead of timing the whole audit out.
+ */
+const TIME_BUDGET_MS = 28_000;
 
 /** Where the answer for each claim type actually lives. */
 const SOURCE_HINT: Record<ClaimType, string> = {
@@ -60,12 +66,17 @@ interface LlmAnswer {
  * fixes, and a message that blames the wrong one sends the reviewer hunting in
  * the wrong place.
  */
-function fallback(c: Claim, reason: "no-provider" | "no-response"): ClaimAnswer {
+function fallback(
+  c: Claim,
+  reason: "no-provider" | "no-response" | "rate-limited",
+): ClaimAnswer {
   return {
     answer:
       reason === "no-provider"
         ? "Not answered automatically — no AI provider is configured."
-        : "The AI check ran but returned no answer for this claim.",
+        : reason === "rate-limited"
+          ? "Not answered — the AI provider's rate limit was hit while answering this page. Re-run the audit in a minute and this should resolve."
+          : "The AI check ran but returned no answer for this claim.",
     basis: `Check "${c.value ?? c.text.slice(0, 60)}" against ${SOURCE_HINT[c.type]}.`,
     confidence: 0,
     unresolved: true,
@@ -73,7 +84,9 @@ function fallback(c: Claim, reason: "no-provider" | "no-response"): ClaimAnswer 
 }
 
 /** Ask for one batch. Returns answers by claim id; empty map on any failure. */
-async function askBatch(batch: Claim[]): Promise<Map<string, LlmAnswer>> {
+async function askBatch(
+  batch: Claim[],
+): Promise<{ answers: Map<string, LlmAnswer>; rateLimited: boolean }> {
   const payload = batch.map((c) => ({
     id: c.id,
     type: c.type,
@@ -83,7 +96,7 @@ async function askBatch(batch: Claim[]): Promise<Map<string, LlmAnswer>> {
     authoritative_source: SOURCE_HINT[c.type],
   }));
 
-  const result = await completeJson<{ answers: LlmAnswer[] }>({
+  const { data: result, error } = await completeJsonDetailed<{ answers: LlmAnswer[] }>({
     system:
       "You are a QA fact-checker for dealership content. The reviewer signs off on this page and is personally accountable for every published figure. Each item below was flagged by an automated check that could not settle it, so the reviewer has a warning and no answer. Answer it.\n\n" +
       "For each item say whether the published figure is correct and what the correct figure is. Ground the answer in the authoritative source named for that item. Be specific: give the figure, the model year and trim it applies to, and any condition attached to it (properly equipped, on select trims, with approved credit).\n\n" +
@@ -93,10 +106,13 @@ async function askBatch(batch: Claim[]): Promise<Map<string, LlmAnswer>> {
       `"answer" is the direct answer in at most two sentences. "basis" is what it rests on. "confidence" is 0-1. ` +
       `Return one entry for every id given.\n\n` +
       JSON.stringify(payload),
-    maxTokens: 1800,
+    maxTokens: 3000,
   });
 
-  return new Map((result?.answers ?? []).filter((a) => a?.id).map((a) => [a.id, a]));
+  return {
+    answers: new Map((result?.answers ?? []).filter((a) => a?.id).map((a) => [a.id, a])),
+    rateLimited: /\b429\b|RESOURCE_EXHAUSTED|rate limit/i.test(error ?? ""),
+  };
 }
 
 /**
@@ -116,16 +132,24 @@ export async function answerUnresolvedClaims(
     return;
   }
 
+  const startedAt = Date.now();
   for (let i = 0; i < targets.length; i += BATCH) {
+    const batch = targets.slice(i, i + BATCH);
+
+    // Out of budget: say so rather than stalling the whole audit.
+    if (Date.now() - startedAt > TIME_BUDGET_MS) {
+      for (const c of batch) c.answer = fallback(c, "rate-limited");
+      continue;
+    }
     // Free-tier keys limit requests per minute; a small gap between batches
     // costs a second and avoids losing a whole batch to a 429.
     if (i > 0) await new Promise((r) => setTimeout(r, 1200));
-    const batch = targets.slice(i, i + BATCH);
-    const answers = await askBatch(batch);
+
+    const { answers, rateLimited } = await askBatch(batch);
     for (const c of batch) {
       const a = answers.get(c.id);
       if (!a || !a.answer) {
-        c.answer = fallback(c, "no-response");
+        c.answer = fallback(c, rateLimited ? "rate-limited" : "no-response");
         continue;
       }
       c.answer = {

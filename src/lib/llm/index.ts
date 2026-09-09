@@ -87,6 +87,50 @@ export async function llmPing(opts: { json?: boolean } = {}): Promise<{
   }
 }
 
+/** complete + parse JSON, surfacing the failure reason instead of just null. */
+export async function completeJsonDetailed<T>(
+  req: LlmRequest,
+): Promise<{ data: T | null; error?: string }> {
+  const provider = activeProvider();
+  if (provider === "rules") return { data: null, error: "no provider configured" };
+  try {
+    const r: LlmRequest = { ...req, json: true };
+    const raw =
+      provider === "anthropic"
+        ? await callAnthropic(r)
+        : provider === "openai"
+          ? await callOpenAI(r)
+          : await callGemini(r);
+    if (!raw) return { data: null, error: "empty response" };
+    const parsed = parseJsonLoose<T>(raw);
+    return parsed === null ? { data: null, error: "unparseable JSON response" } : { data: parsed };
+  } catch (e) {
+    return { data: null, error: (e as Error).message };
+  }
+}
+
+/** Parse a model reply that may be fenced or wrapped in prose. */
+function parseJsonLoose<T>(raw: string): T | null {
+  const cleaned = raw
+    .trim()
+    .replace(/^```(?:json)?/i, "")
+    .replace(/```$/, "")
+    .trim();
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]) as T;
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
 /** Convenience: complete + parse JSON, returning null on any failure. */
 export async function completeJson<T>(req: LlmRequest): Promise<T | null> {
   const raw = await complete({ ...req, json: true });
@@ -186,7 +230,7 @@ async function callGemini(req: LlmRequest, attempt = 0): Promise<string | null> 
     // so honour it once rather than dropping the whole batch of answers.
     if (res.status === 429 && attempt < 1) {
       const m = body.match(/"retryDelay"\s*:\s*"(\d+)(?:\.\d+)?s"/);
-      const waitMs = Math.min(8000, Math.max(1000, (m ? Number(m[1]) : 5) * 1000));
+      const waitMs = Math.min(20_000, Math.max(1000, (m ? Number(m[1]) : 15) * 1000));
       await new Promise((r) => setTimeout(r, waitMs));
       return callGemini(req, attempt + 1);
     }
