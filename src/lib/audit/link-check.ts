@@ -8,7 +8,11 @@
 import { genId } from "../utils";
 import type { LinkCheck } from "./types";
 
-const UA = "DealerQA-AI/0.1 (+link-checker)";
+// A real browser UA. The point is to see what a customer sees; a bot string
+// gets blocked or 404'd by sites that serve the page fine to a browser, which
+// produces failures that are artefacts of the checker rather than the page.
+const UA =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const CONCURRENCY = 8;
 
 /**
@@ -39,6 +43,27 @@ export async function urlResolves(url: string): Promise<boolean> {
   }
 }
 
+/** Signs that a page is a "not found" page whatever status it returned. */
+const NOT_FOUND_TITLE = /(page|file)?\s*not\s*found|404|doesn'?t exist|no longer available/i;
+
+/** Pull the <title> from a response body, as evidence for the reviewer. */
+async function readTitle(res: Response): Promise<string | undefined> {
+  try {
+    // Skip only what is definitely not markup. Requiring text/html loses the
+    // evidence on servers that send no content-type at all — including the
+    // dealership 404 pages this exists to prove.
+    const ct = res.headers.get("content-type") || "";
+    if (/^(image|video|audio|font)\//i.test(ct) || /application\/(pdf|zip|octet)/i.test(ct)) {
+      return undefined;
+    }
+    const body = (await res.text()).slice(0, 200_000);
+    const m = body.match(/<title[^>]*>([^<]{1,200})<\/title>/i);
+    return m ? m[1].replace(/\s+/g, " ").trim() : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function checkOne(link: { url: string; text: string }): Promise<LinkCheck> {
   const base: LinkCheck = {
     id: genId("link"),
@@ -61,29 +86,78 @@ async function checkOne(link: { url: string; text: string }): Promise<LinkCheck>
   const doFetch = (method: "HEAD" | "GET") =>
     fetch(link.url, {
       method,
-      headers: { "user-agent": UA, accept: "*/*" },
+      headers: {
+        "user-agent": UA,
+        accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "accept-language": "en-US,en;q=0.9",
+      },
       redirect: "follow",
       signal: AbortSignal.timeout(15_000),
     });
 
   try {
     let res = await doFetch("HEAD");
-    // Many servers return 405/403 for HEAD — retry with GET.
-    if (res.status === 405 || res.status === 403 || res.status === 501) {
-      res = await doFetch("GET");
-    }
+    // HEAD is unreliable: plenty of servers answer it with 404/405/403 while
+    // serving the page perfectly over GET. Any error status gets a real GET
+    // before we call a link broken.
+    if (res.status >= 400) res = await doFetch("GET");
+
     const redirected = res.redirected || res.url !== link.url;
     const httpStatus = res.status;
 
     if (httpStatus >= 400) {
+      // Capture the destination's title. A dealership 404 is often a fully
+      // branded page, so a reviewer who opens it sees a normal-looking site
+      // and assumes the checker was wrong. The title settles it.
+      const destinationTitle = await readTitle(res);
+
+      // A block is not proof of breakage. Bot protection answers automated
+      // requests with 401/403/429 while the page works fine in a browser, so
+      // this is reported as unverified rather than broken.
+      const blocked = httpStatus === 401 || httpStatus === 403 || httpStatus === 429;
       return {
         ...base,
-        status: "fail",
+        status: blocked ? "warning" : "fail",
         httpStatus,
-        error: httpStatus === 404 ? "404 Not Found" : `HTTP ${httpStatus}`,
+        destinationTitle,
+        blocked,
+        error: blocked
+          ? `HTTP ${httpStatus} — the site blocked the automated check, so this link could not be verified. Open it to confirm by eye.`
+          : httpStatus === 404
+            ? "404 Not Found"
+            : `HTTP ${httpStatus}`,
         redirectedTo: redirected ? res.url : undefined,
       };
     }
+
+    // A 200 that is really a "not found" page — the opposite mistake, and one
+    // a status-only check misses entirely.
+    if (res.status === 200) {
+      const destinationTitle = await readTitle(res);
+      if (destinationTitle && NOT_FOUND_TITLE.test(destinationTitle)) {
+        return {
+          ...base,
+          status: "warning",
+          httpStatus,
+          destinationTitle,
+          error: `Returned HTTP 200 but the page is titled "${destinationTitle}" — likely a soft 404.`,
+          redirectedTo: redirected ? res.url : undefined,
+        };
+      }
+      if (redirected) {
+        return {
+          ...base,
+          status: "warning",
+          httpStatus,
+          destinationTitle,
+          redirectedTo: res.url,
+          redirectChain: 1,
+          error: "Redirected — verify destination is intended.",
+        };
+      }
+      return { ...base, status: "pass", httpStatus, destinationTitle };
+    }
+
     if (redirected) {
       return {
         ...base,

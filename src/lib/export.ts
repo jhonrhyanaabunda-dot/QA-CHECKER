@@ -159,7 +159,7 @@ export function auditToMarkdown(audit: Audit): string {
       L.push(`  - URL: ${l.url}`);
       if (l.httpStatus) {
         L.push(
-          `  - HTTP ${l.httpStatus}${l.httpStatus === 403 ? " — blocked for automated checks; open it to confirm by eye" : ""}`,
+          `  - HTTP ${l.httpStatus}${l.blocked ? " — the site blocked the automated check, so this is unverified rather than proven broken" : ""}`,
         );
       }
       // The error text often just restates the status ("HTTP 403"); don't
@@ -167,6 +167,9 @@ export function auditToMarkdown(audit: Audit): string {
       if (l.error && !(l.httpStatus && l.error.includes(String(l.httpStatus)))) {
         L.push(`  - ${l.error}`);
       }
+      // The title of whatever was actually served. A branded 404 looks like a
+      // working page when opened, so this is the evidence that settles it.
+      if (l.destinationTitle) L.push(`  - Page served: "${l.destinationTitle}"`);
       if (l.redirectedTo) L.push(`  - Redirects to: ${l.redirectedTo}`);
       const where = [
         l.section ? `section "${l.section}"` : null,

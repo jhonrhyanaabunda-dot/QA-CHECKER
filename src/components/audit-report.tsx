@@ -581,7 +581,13 @@ function LinksTab({ audit }: { audit: Audit }) {
                 )}
                 {/* Where this link lives, and a jump straight to it. */}
                 <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                  {l.section && (
+                  {l.destinationTitle && (
+                  <p className="truncate text-xs">
+                    <span className="text-muted-foreground">Page served: </span>
+                    <span className="font-medium">&ldquo;{l.destinationTitle}&rdquo;</span>
+                  </p>
+                )}
+                {l.section && (
                     <span className="text-muted-foreground">
                       Section: <span className="text-foreground">{l.section}</span>
                     </span>
@@ -608,7 +614,7 @@ function LinksTab({ audit }: { audit: Audit }) {
                     "shrink-0 rounded px-1.5 py-0.5 text-xs",
                     l.httpStatus >= 400 ? "bg-destructive/15 text-destructive" : "bg-secondary",
                   )}
-                  title={l.httpStatus === 403 ? "Blocked for automated checks — open it to confirm by eye" : undefined}
+                  title={l.blocked ? "The site blocked the automated check — unverified, not proven broken" : undefined}
                 >
                   {l.httpStatus}
                 </code>

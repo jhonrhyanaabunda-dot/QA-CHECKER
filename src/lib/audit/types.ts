@@ -127,6 +127,10 @@ export interface LinkCheck {
   /** Final URL after following redirects, if it differs. */
   redirectedTo?: string;
   redirectChain?: number;
+  /** <title> of whatever the URL actually served — evidence for the reviewer. */
+  destinationTitle?: string;
+  /** True when the site blocked the automated check, so this is unverified. */
+  blocked?: boolean;
   error?: string;
 }
 
