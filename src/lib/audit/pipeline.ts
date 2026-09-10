@@ -142,6 +142,10 @@ export async function* runAudit(
   const ratings = await checkRatings(content, dealership);
 
   // Answers mutate the claims in place, so they must land before the rollup.
+  // Announce the wait: without this the progress bar sits on the previous
+  // step's label for however long the answers take, telling the reviewer the
+  // wrong thing about what the audit is doing.
+  yield { step: "answer-finish", label: "Finishing AI answers…", progress: 90 };
   await answersPromise;
 
   // Roll up paragraph statuses now that claims + issues are attached.
