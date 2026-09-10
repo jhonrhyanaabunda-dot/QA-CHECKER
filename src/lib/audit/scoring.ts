@@ -86,6 +86,59 @@ export function computeScore(input: {
 }
 
 /** Roll a paragraph's claims + issues into a single status & confidence. */
+/**
+ * Why a paragraph carries the status it does, in the reviewer's terms.
+ *
+ * A green badge on its own is ambiguous in a way that matters for sign-off:
+ * a paragraph containing no checkable claim and one whose figures were
+ * confirmed against the EPA both render as PASS, and those are very different
+ * things to put your name to. This states which of the two it is, and lists
+ * every check that ran.
+ */
+export function explainParagraph(
+  p: Pick<ParagraphAudit, "claims" | "issues" | "status">,
+  complianceCount = 0,
+): { headline: string; checks: string[] } {
+  const verified = p.claims.filter((c) => c.status === "pass");
+  const warning = p.claims.filter((c) => c.status === "warning");
+  const failing = p.claims.filter((c) => c.status === "fail");
+
+  const checks: string[] = [];
+  if (!p.claims.length) {
+    checks.push(
+      "Factual claims — none detected: no figures, prices, ratings, specs or dates to check against a source.",
+    );
+  } else {
+    const parts = [`${p.claims.length} detected`];
+    if (verified.length) parts.push(`${verified.length} verified`);
+    if (warning.length) parts.push(`${warning.length} flagged`);
+    if (failing.length) parts.push(`${failing.length} incorrect`);
+    checks.push(`Factual claims — ${parts.join(", ")}.`);
+  }
+  checks.push(
+    p.issues.length
+      ? `Grammar & style — ${p.issues.length} issue(s) found.`
+      : "Grammar & style — no spelling, readability or AI-tone issues found.",
+  );
+  checks.push(
+    complianceCount
+      ? `Compliance — ${complianceCount} unsupported claim(s) flagged.`
+      : "Compliance — no unsupported superlatives or absolute guarantees.",
+  );
+
+  let headline: string;
+  if (p.status === "pass") {
+    headline = verified.length
+      ? `Passed — ${verified.length} claim${verified.length === 1 ? "" : "s"} checked against an authoritative source and matched.`
+      : "Passed — nothing here states a checkable fact, and no grammar or compliance issues were found. Not the same as verified.";
+  } else if (p.status === "warning") {
+    headline = "Needs review — see the findings below.";
+  } else {
+    headline = "Failed — see the findings below.";
+  }
+  return { headline, checks };
+}
+
 export function paragraphStatus(p: Omit<ParagraphAudit, "status" | "confidence">): {
   status: Status;
   confidence: number;

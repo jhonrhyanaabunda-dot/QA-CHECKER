@@ -23,6 +23,7 @@ import { cn, formatDate, scoreColor } from "@/lib/utils";
 import type {
   Audit, Claim, ClaimAnswer, ContentIssue, ParagraphAudit, ReviewChecklist, Status,
 } from "@/lib/audit/types";
+import { explainParagraph } from "@/lib/audit/scoring";
 
 const TABS = [
   { key: "paragraphs", label: "Paragraph Audit", icon: FileText },
@@ -247,15 +248,22 @@ function ParagraphsTab({ audit }: { audit: Audit }) {
   return (
     <div className="space-y-3">
       {audit.paragraphs.map((p) => (
-        <ParagraphCard key={p.index} p={p} />
+        <ParagraphCard
+          key={p.index}
+          p={p}
+          compliance={audit.compliance.filter((c) => c.paragraphIndex === p.index).length}
+        />
       ))}
     </div>
   );
 }
 
-function ParagraphCard({ p }: { p: ParagraphAudit }) {
+function ParagraphCard({ p, compliance }: { p: ParagraphAudit; compliance: number }) {
   const [open, setOpen] = useState(p.status !== "pass");
-  const hasDetail = p.claims.length > 0 || p.issues.length > 0;
+  const { headline, checks } = explainParagraph(p, compliance);
+  // Every paragraph now has something to show — at minimum, which checks ran
+  // and why it passed.
+  const hasDetail = true;
   return (
     <Card className={cn("print-break", borderForStatus(p.status))}>
       <button
@@ -267,13 +275,19 @@ function ParagraphCard({ p }: { p: ParagraphAudit }) {
         </span>
         <div className="min-w-0 flex-1">
           <p className="text-sm leading-relaxed">{p.content}</p>
-          {hasDetail && (
-            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              {p.claims.length > 0 && <span>{p.claims.length} claim(s)</span>}
-              {p.issues.length > 0 && <span>{p.issues.length} content issue(s)</span>}
-              <span>· confidence {Math.round(p.confidence * 100)}%</span>
-            </div>
-          )}
+          <p
+            className={cn(
+              "mt-1.5 text-xs",
+              p.status === "pass" ? "text-success" : "text-muted-foreground",
+            )}
+          >
+            {headline}
+          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            {p.claims.length > 0 && <span>{p.claims.length} claim(s)</span>}
+            {p.issues.length > 0 && <span>{p.issues.length} content issue(s)</span>}
+            <span>· confidence {Math.round(p.confidence * 100)}%</span>
+          </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <StatusBadge status={p.status} />
@@ -284,6 +298,18 @@ function ParagraphCard({ p }: { p: ParagraphAudit }) {
       {open && hasDetail && (
         <CardContent className="space-y-3 pt-0">
           <Separator />
+          <div className="rounded-lg border bg-secondary/30 p-3">
+            <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Checks run on this paragraph
+            </p>
+            <ul className="space-y-0.5">
+              {checks.map((c, i) => (
+                <li key={i} className="text-xs text-muted-foreground">
+                  {c}
+                </li>
+              ))}
+            </ul>
+          </div>
           {p.claims.map((c) => <ClaimRow key={c.id} claim={c} />)}
           {p.issues.map((i) => <IssueRow key={i.id} issue={i} />)}
           {p.suggestedCorrection && (
