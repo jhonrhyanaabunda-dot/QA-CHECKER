@@ -257,15 +257,30 @@ function ParagraphsTab({ audit }: { audit: Audit }) {
           key={p.index}
           p={p}
           compliance={audit.compliance.filter((c) => c.paragraphIndex === p.index).length}
+          complianceSources={audit.compliance
+            .filter((c) => c.paragraphIndex === p.index)
+            .map((c) => c.sourceUrl)
+            .filter((u): u is string => !!u)}
+          analyzer={audit.llmProvider}
         />
       ))}
     </div>
   );
 }
 
-function ParagraphCard({ p, compliance }: { p: ParagraphAudit; compliance: number }) {
+function ParagraphCard({
+  p,
+  compliance,
+  complianceSources,
+  analyzer,
+}: {
+  p: ParagraphAudit;
+  compliance: number;
+  complianceSources: string[];
+  analyzer: string;
+}) {
   const [open, setOpen] = useState(p.status !== "pass");
-  const { headline, checks } = explainParagraph(p, compliance);
+  const { headline, checks } = explainParagraph(p, compliance, { analyzer, complianceSources });
   // Every paragraph now has something to show — at minimum, which checks ran
   // and why it passed.
   const hasDetail = true;
@@ -307,10 +322,33 @@ function ParagraphCard({ p, compliance }: { p: ParagraphAudit; compliance: numbe
             <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               Checks run on this paragraph
             </p>
-            <ul className="space-y-0.5">
+            <ul className="space-y-1.5">
               {checks.map((c, i) => (
                 <li key={i} className="text-xs text-muted-foreground">
-                  {c}
+                  <span className="font-medium text-foreground">{c.label}</span> — {c.detail}
+                  {c.sources.length > 0 && (
+                    <span className="ml-1">
+                      {/* Say plainly whether a source was fetched for this
+                          paragraph or is merely the standard being applied. */}
+                      <span className="text-[11px] uppercase tracking-wide">
+                        {c.consulted ? "Verified against: " : "Reference: "}
+                      </span>
+                      {c.sources.map((s, j) => (
+                        <span key={j}>
+                          {j > 0 && " · "}
+                          <a
+                            href={s.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-primary hover:underline"
+                          >
+                            {s.label}
+                            <ExternalLink className="ml-0.5 inline size-3" />
+                          </a>
+                        </span>
+                      ))}
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>

@@ -83,11 +83,19 @@ export function auditToMarkdown(audit: Audit): string {
   L.push("");
   L.push("Where an automated check could not settle a claim, an **Answer** is given with the source it rests on. Cited sources are fetched before publication; any that did not resolve were removed and are marked as such.");
   L.push("");
+  L.push("Each check carries its evidence, labelled to say exactly what it is:");
+  L.push("");
+  L.push("- **Verified against** — this page was actually fetched and checked for this paragraph.");
+  L.push("- **Reference** — the authority the check applies. Listed so the standard is auditable; it does not mean anything in this paragraph was looked up.");
+  L.push("");
   L.push("## Paragraph-by-paragraph review");
 
   for (const p of audit.paragraphs as ParagraphAudit[]) {
     const comp = audit.compliance.filter((c) => c.paragraphIndex === p.index);
-    const { headline, checks } = explainParagraph(p, comp.length);
+    const { headline, checks } = explainParagraph(p, comp.length, {
+      analyzer: audit.llmProvider,
+      complianceSources: comp.map((c) => c.sourceUrl).filter((u): u is string => !!u),
+    });
     L.push("");
     L.push(`### Paragraph ${p.index + 1} — ${badge(p.status)}`);
     L.push("");
@@ -96,7 +104,13 @@ export function auditToMarkdown(audit: Audit): string {
     L.push(`**Verdict:** ${headline}`);
     L.push("");
     L.push(`**Checks run:**`);
-    for (const c of checks) L.push(`- ${c}`);
+    for (const c of checks) {
+      const srcs = c.sources.map((s) => `[${s.label}](${s.url})`).join(" · ");
+      const tag = c.sources.length
+        ? ` — ${c.consulted ? "Verified against" : "Reference"}: ${srcs}`
+        : "";
+      L.push(`- **${c.label}** — ${c.detail}${tag}`);
+    }
 
     for (const c of p.claims) {
       L.push("");

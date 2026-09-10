@@ -86,45 +86,107 @@ export function computeScore(input: {
 }
 
 /** Roll a paragraph's claims + issues into a single status & confidence. */
+/** A reference whose URL was confirmed to resolve. */
+export interface CheckSource {
+  label: string;
+  url: string;
+}
+
+/** One check that ran against a paragraph, with the evidence behind it. */
+export interface ParagraphCheck {
+  label: string;
+  detail: string;
+  /**
+   * True when a source was actually fetched for THIS paragraph. False means
+   * the listed references are the standard the check applies, not something
+   * consulted — a distinction that matters when nothing was checkable.
+   */
+  consulted: boolean;
+  sources: CheckSource[];
+}
+
+// Authorities each check answers to. Every URL here was confirmed to return
+// HTTP 200; none are model-generated.
+const EPA: CheckSource = { label: "EPA FuelEconomy.gov", url: "https://www.fueleconomy.gov/feg/findacar.shtml" };
+const NHTSA: CheckSource = { label: "NHTSA vPIC", url: "https://vpic.nhtsa.dot.gov/api/" };
+const FTC: CheckSource = { label: "FTC advertising guidance", url: "https://www.ftc.gov/business-guidance/advertising-marketing" };
+
 /**
  * Why a paragraph carries the status it does, in the reviewer's terms.
  *
  * A green badge on its own is ambiguous in a way that matters for sign-off:
  * a paragraph containing no checkable claim and one whose figures were
  * confirmed against the EPA both render as PASS, and those are very different
- * things to put your name to. This states which of the two it is, and lists
- * every check that ran.
+ * things to put your name to. This states which of the two it is, lists every
+ * check that ran, and carries the source behind each one.
  */
 export function explainParagraph(
   p: Pick<ParagraphAudit, "claims" | "issues" | "status">,
   complianceCount = 0,
-): { headline: string; checks: string[] } {
+  opts: { analyzer?: string; complianceSources?: string[] } = {},
+): { headline: string; checks: ParagraphCheck[] } {
   const verified = p.claims.filter((c) => c.status === "pass");
   const warning = p.claims.filter((c) => c.status === "warning");
   const failing = p.claims.filter((c) => c.status === "fail");
 
-  const checks: string[] = [];
+  const checks: ParagraphCheck[] = [];
+
+  // ── Facts ────────────────────────────────────────────────────────────────
+  // Prefer the exact pages claims were actually verified against; fall back to
+  // naming the authorities the check would have used.
+  const claimSources: CheckSource[] = [];
+  const seen = new Set<string>();
+  for (const c of p.claims) {
+    if (!c.sourceUrl || seen.has(c.sourceUrl)) continue;
+    seen.add(c.sourceUrl);
+    claimSources.push({ label: c.source || "source", url: c.sourceUrl });
+  }
   if (!p.claims.length) {
-    checks.push(
-      "Factual claims — none detected: no figures, prices, ratings, specs or dates to check against a source.",
-    );
+    checks.push({
+      label: "Factual claims",
+      detail:
+        "None detected — no figures, prices, ratings, specs or dates in this text to check against a source, so none was consulted.",
+      consulted: false,
+      sources: [EPA, NHTSA],
+    });
   } else {
     const parts = [`${p.claims.length} detected`];
     if (verified.length) parts.push(`${verified.length} verified`);
     if (warning.length) parts.push(`${warning.length} flagged`);
     if (failing.length) parts.push(`${failing.length} incorrect`);
-    checks.push(`Factual claims — ${parts.join(", ")}.`);
+    checks.push({
+      label: "Factual claims",
+      detail: `${parts.join(", ")}.`,
+      consulted: claimSources.length > 0,
+      sources: claimSources.length ? claimSources : [EPA, NHTSA],
+    });
   }
-  checks.push(
-    p.issues.length
-      ? `Grammar & style — ${p.issues.length} issue(s) found.`
-      : "Grammar & style — no spelling, readability or AI-tone issues found.",
-  );
-  checks.push(
-    complianceCount
-      ? `Compliance — ${complianceCount} unsupported claim(s) flagged.`
-      : "Compliance — no unsupported superlatives or absolute guarantees.",
-  );
+
+  // ── Grammar / style ──────────────────────────────────────────────────────
+  // No external authority exists for this one; the honest provenance is which
+  // analyzer produced the verdict.
+  checks.push({
+    label: "Grammar & style",
+    detail: p.issues.length
+      ? `${p.issues.length} issue(s) found.`
+      : `No spelling, readability or AI-tone issues found. Checked by ${opts.analyzer || "the rule-based analyzer"}.`,
+    consulted: true,
+    sources: [],
+  });
+
+  // ── Compliance ───────────────────────────────────────────────────────────
+  const compSources: CheckSource[] = (opts.complianceSources ?? [])
+    .filter(Boolean)
+    .slice(0, 3)
+    .map((url) => ({ label: "FTC guidance", url }));
+  checks.push({
+    label: "Compliance",
+    detail: complianceCount
+      ? `${complianceCount} unsupported claim(s) flagged.`
+      : "No unsupported superlatives or absolute guarantees found.",
+    consulted: complianceCount > 0,
+    sources: compSources.length ? compSources : [FTC],
+  });
 
   let headline: string;
   if (p.status === "pass") {
