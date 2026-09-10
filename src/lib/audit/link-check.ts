@@ -101,8 +101,34 @@ async function checkOne(link: { url: string; text: string }): Promise<LinkCheck>
   }
 }
 
+/**
+ * A deep link back to the audited page, scrolled to this link's anchor text.
+ * Uses a scroll-to-text fragment, so the reviewer lands on the exact spot and
+ * the browser highlights it — no hunting through a long pillar page.
+ */
+function locateOnPage(pageUrl: string, anchorText: string): string | undefined {
+  const t = anchorText.trim();
+  // Very short or very long anchors make unreliable fragments.
+  if (!pageUrl || t.length < 3 || t.length > 300) return undefined;
+  if (/^https?:\/\//i.test(t)) return undefined;
+  try {
+    // Strip any existing fragment before appending our own.
+    const base = pageUrl.split("#")[0];
+    return `${base}#:~:text=${encodeURIComponent(t)}`;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function checkLinks(
-  links: { url: string; text: string }[],
+  links: {
+    url: string;
+    text: string;
+    section?: string;
+    paragraphIndex?: number;
+  }[],
+  /** The audited page, used to build "jump to this link" deep links. */
+  pageUrl = "",
 ): Promise<LinkCheck[]> {
   const results: LinkCheck[] = [];
   let cursor = 0;
@@ -110,7 +136,14 @@ export async function checkLinks(
   async function worker() {
     while (cursor < links.length) {
       const i = cursor++;
-      results[i] = await checkOne(links[i]);
+      const link = links[i];
+      const checked = await checkOne(link);
+      results[i] = {
+        ...checked,
+        section: link.section,
+        paragraphIndex: link.paragraphIndex,
+        locateUrl: locateOnPage(pageUrl, link.text),
+      };
     }
   }
 

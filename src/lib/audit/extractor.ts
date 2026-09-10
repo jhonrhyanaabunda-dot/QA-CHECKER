@@ -94,17 +94,47 @@ export function extract(html: string, finalUrl: string): ExtractedContent {
     if (t && t.length < 120) ctas.push(t);
   });
 
-  // Links
-  const linkMap = new Map<string, string>();
+  // Links — keep where each one lives, so a broken link can be pointed at
+  // rather than just named. First occurrence wins; the same URL repeated in a
+  // nav and a paragraph is one finding, located at its first appearance.
+  const linkMap = new Map<string, ExtractedContent["links"][number]>();
   $("a[href]").each((_, el) => {
     const href = $(el).attr("href") || "";
     if (!href || href.startsWith("#") || href.startsWith("javascript:")) return;
     if (href.startsWith("mailto:") || href.startsWith("tel:")) return;
     const abs = resolveUrl(href, finalUrl);
-    if (!abs) return;
-    if (!linkMap.has(abs)) linkMap.set(abs, clean($(el).text()) || abs);
+    if (!abs || linkMap.has(abs)) return;
+
+    // Nearest heading above this link, walking up then back through siblings.
+    let section: string | undefined;
+    const heading = $(el).prevAll("h1, h2, h3, h4").first();
+    if (heading.length) section = clean(heading.text()) || undefined;
+    if (!section) {
+      const fromParents = $(el)
+        .parents()
+        .toArray()
+        .map((par) => $(par).prevAll("h1, h2, h3, h4").first())
+        .find((h) => h.length);
+      if (fromParents) section = clean(fromParents.text()) || undefined;
+    }
+
+    // Containing paragraph, matched back to the extracted paragraph list.
+    let paragraphIndex: number | undefined;
+    const pEl = $(el).closest("p");
+    if (pEl.length) {
+      const pText = clean(pEl.text());
+      const idx = paragraphs.indexOf(pText);
+      if (idx >= 0) paragraphIndex = idx;
+    }
+
+    linkMap.set(abs, {
+      url: abs,
+      text: clean($(el).text()) || abs,
+      section,
+      paragraphIndex,
+    });
   });
-  const links = Array.from(linkMap, ([url, text]) => ({ url, text }));
+  const links = Array.from(linkMap.values());
 
   // Images + captions (alt text + nearby <figcaption>)
   const images: ExtractedContent["images"] = [];

@@ -113,6 +113,16 @@ export interface LinkCheck {
   url: string;
   text: string;
   status: Status;
+  /** Nearest heading above the link on the audited page. */
+  section?: string;
+  /** Containing paragraph index, when the link sits inside one. */
+  paragraphIndex?: number;
+  /**
+   * Deep link back to the audited page, scrolled to this link's anchor text
+   * (scroll-to-text fragment). Lets a reviewer jump straight to the offending
+   * link in the pillar page instead of hunting for it.
+   */
+  locateUrl?: string;
   httpStatus?: number;
   /** Final URL after following redirects, if it differs. */
   redirectedTo?: string;
@@ -160,7 +170,14 @@ export interface ExtractedContent {
   buttons: string[];
   ctas: string[];
   phones: string[];
-  links: { url: string; text: string }[];
+  links: {
+    url: string;
+    text: string;
+    /** Nearest heading above the link — the section a reviewer should look in. */
+    section?: string;
+    /** Index of the containing paragraph, when the link sits inside one. */
+    paragraphIndex?: number;
+  }[];
   images: { src: string; alt: string; caption?: string }[];
   /** Raw visible text, used for page-level claim sweeps. */
   text: string;

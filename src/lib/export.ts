@@ -5,7 +5,7 @@
 // ───────────────────────────────────────────────────────────────────────────
 
 import type { Audit, ParagraphAudit } from "./audit/types";
-import { explainParagraph } from "./audit/scoring";
+import { explainParagraph, CHECK_AUTHORITIES } from "./audit/scoring";
 
 function esc(v: unknown): string {
   const s = String(v ?? "");
@@ -83,10 +83,11 @@ export function auditToMarkdown(audit: Audit): string {
   L.push("");
   L.push("Where an automated check could not settle a claim, an **Answer** is given with the source it rests on. Cited sources are fetched before publication; any that did not resolve were removed and are marked as such.");
   L.push("");
-  L.push("Each check carries its evidence, labelled to say exactly what it is:");
+  L.push("Where a paragraph shows **Verified against**, that page was actually fetched and checked for it. Paragraphs with no source listed had nothing to look up.");
   L.push("");
-  L.push("- **Verified against** — this page was actually fetched and checked for this paragraph.");
-  L.push("- **Reference** — the authority the check applies. Listed so the standard is auditable; it does not mean anything in this paragraph was looked up.");
+  L.push("**Standards these checks answer to** (listed once, they apply throughout):");
+  L.push("");
+  for (const a of CHECK_AUTHORITIES) L.push(`- [${a.label}](${a.url})`);
   L.push("");
   L.push("## Paragraph-by-paragraph review");
 
@@ -105,11 +106,14 @@ export function auditToMarkdown(audit: Audit): string {
     L.push("");
     L.push(`**Checks run:**`);
     for (const c of checks) {
-      const srcs = c.sources.map((s) => `[${s.label}](${s.url})`).join(" · ");
-      const tag = c.sources.length
-        ? ` — ${c.consulted ? "Verified against" : "Reference"}: ${srcs}`
-        : "";
-      L.push(`- **${c.label}** — ${c.detail}${tag}`);
+      // Only sources actually fetched for this paragraph; the standards are
+      // listed once up top rather than repeated under all 150 paragraphs.
+      const seenSrc = new Set<string>();
+      const srcs = c.sources
+        .filter((s) => !seenSrc.has(s.url) && seenSrc.add(s.url))
+        .map((s) => `[${s.label}](${s.url})`)
+        .join(" · ");
+      L.push(`- **${c.label}** — ${c.detail}${srcs ? ` — Verified against: ${srcs}` : ""}`);
     }
 
     for (const c of p.claims) {
@@ -151,10 +155,25 @@ export function auditToMarkdown(audit: Audit): string {
   } else {
     for (const l of bad) {
       L.push("");
-      L.push(`- **${badge(l.status)}** ${l.url}`);
-      if (l.error) L.push(`  - ${l.error}`);
-      if (l.httpStatus) L.push(`  - HTTP ${l.httpStatus}`);
+      L.push(`- **${badge(l.status)}** [${l.text || l.url}](${l.url})`);
+      L.push(`  - URL: ${l.url}`);
+      if (l.httpStatus) {
+        L.push(
+          `  - HTTP ${l.httpStatus}${l.httpStatus === 403 ? " — blocked for automated checks; open it to confirm by eye" : ""}`,
+        );
+      }
+      // The error text often just restates the status ("HTTP 403"); don't
+      // print the same fact twice.
+      if (l.error && !(l.httpStatus && l.error.includes(String(l.httpStatus)))) {
+        L.push(`  - ${l.error}`);
+      }
       if (l.redirectedTo) L.push(`  - Redirects to: ${l.redirectedTo}`);
+      const where = [
+        l.section ? `section "${l.section}"` : null,
+        l.paragraphIndex != null ? `paragraph ${l.paragraphIndex + 1}` : null,
+      ].filter(Boolean);
+      if (where.length) L.push(`  - Found in: ${where.join(", ")}`);
+      if (l.locateUrl) L.push(`  - Find on page: ${l.locateUrl}`);
     }
   }
 

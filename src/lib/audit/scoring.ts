@@ -112,6 +112,14 @@ const NHTSA: CheckSource = { label: "NHTSA vPIC", url: "https://vpic.nhtsa.dot.g
 const FTC: CheckSource = { label: "FTC advertising guidance", url: "https://www.ftc.gov/business-guidance/advertising-marketing" };
 
 /**
+ * The authorities these checks answer to. Listed once in the report and in the
+ * exported document rather than repeated under every paragraph, where the same
+ * three links appeared hundreds of times and buried the sources that were
+ * actually fetched.
+ */
+export const CHECK_AUTHORITIES: CheckSource[] = [EPA, NHTSA, FTC];
+
+/**
  * Why a paragraph carries the status it does, in the reviewer's terms.
  *
  * A green badge on its own is ambiguous in a way that matters for sign-off:
@@ -147,7 +155,7 @@ export function explainParagraph(
       detail:
         "None detected — no figures, prices, ratings, specs or dates in this text to check against a source, so none was consulted.",
       consulted: false,
-      sources: [EPA, NHTSA],
+      sources: [],
     });
   } else {
     const parts = [`${p.claims.length} detected`];
@@ -158,7 +166,7 @@ export function explainParagraph(
       label: "Factual claims",
       detail: `${parts.join(", ")}.`,
       consulted: claimSources.length > 0,
-      sources: claimSources.length ? claimSources : [EPA, NHTSA],
+      sources: claimSources,
     });
   }
 
@@ -185,7 +193,7 @@ export function explainParagraph(
       ? `${complianceCount} unsupported claim(s) flagged.`
       : "No unsupported superlatives or absolute guarantees found.",
     consulted: complianceCount > 0,
-    sources: compSources.length ? compSources : [FTC],
+    sources: compSources,
   });
 
   let headline: string;

@@ -23,7 +23,7 @@ import { cn, formatDate, scoreColor } from "@/lib/utils";
 import type {
   Audit, Claim, ClaimAnswer, ContentIssue, ParagraphAudit, ReviewChecklist, Status,
 } from "@/lib/audit/types";
-import { explainParagraph } from "@/lib/audit/scoring";
+import { explainParagraph, CHECK_AUTHORITIES } from "@/lib/audit/scoring";
 
 const TABS = [
   { key: "paragraphs", label: "Paragraph Audit", icon: FileText },
@@ -248,11 +248,45 @@ function ReviewChecklistCard({
 
 // ── Paragraph audit tab ──────────────────────────────────────────────────────
 function ParagraphsTab({ audit }: { audit: Audit }) {
+  // Reviewers working through several pages need the problems first; a long
+  // page is mostly passes and scrolling past them wastes the whole review.
+  const [issuesOnly, setIssuesOnly] = useState(false);
   if (!audit.paragraphs.length)
     return <Empty msg="No paragraph content was extracted from this page." />;
+
+  const flagged = audit.paragraphs.filter((p) => p.status !== "pass");
+  const shown = issuesOnly ? flagged : audit.paragraphs;
+
   return (
     <div className="space-y-3">
-      {audit.paragraphs.map((p) => (
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-secondary/30 p-3 text-xs no-print">
+        <label className="flex cursor-pointer items-center gap-2">
+          <input
+            type="checkbox"
+            checked={issuesOnly}
+            onChange={(e) => setIssuesOnly(e.target.checked)}
+            className="size-4 rounded border-input accent-[hsl(var(--primary))]"
+          />
+          <span className="font-medium">
+            Show only paragraphs needing review ({flagged.length} of {audit.paragraphs.length})
+          </span>
+        </label>
+        <span className="ml-auto text-muted-foreground">
+          Checks answer to{" "}
+          {CHECK_AUTHORITIES.map((a, i) => (
+            <span key={a.url}>
+              {i > 0 && " · "}
+              <a href={a.url} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                {a.label}
+              </a>
+            </span>
+          ))}
+        </span>
+      </div>
+      {issuesOnly && !flagged.length && (
+        <Empty msg="No paragraph needs review — every one passed." />
+      )}
+      {shown.map((p) => (
         <ParagraphCard
           key={p.index}
           p={p}
@@ -289,6 +323,8 @@ function ParagraphCard({
       <button
         className="flex w-full items-start gap-3 p-4 text-left"
         onClick={() => hasDetail && setOpen((o) => !o)}
+        aria-expanded={open}
+        aria-label={`Paragraph ${p.index + 1}, ${p.status}. ${headline}`}
       >
         <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-md bg-secondary text-xs font-semibold tabular-nums">
           {p.index + 1}
@@ -525,20 +561,57 @@ function LinksTab({ audit }: { audit: Audit }) {
       <CardContent className="p-0">
         <div className="divide-y">
           {audit.links.map((l) => (
-            <div key={l.id} className="flex items-center gap-3 p-3 text-sm">
+            <div key={l.id} className="flex items-start gap-3 p-3 text-sm">
               <StatusBadge status={l.status} />
               <div className="min-w-0 flex-1">
                 <a href={l.url} target="_blank" rel="noreferrer" className="block truncate text-primary hover:underline">
-                  {l.url}
+                  {l.text && l.text !== l.url ? l.text : l.url}
                 </a>
-                {(l.error || l.redirectedTo) && (
+                <p className="truncate text-xs text-muted-foreground">{l.url}</p>
+                {/* The error usually restates the status code shown at the
+                    right; only show it when it adds something. */}
+                {((l.error && !(l.httpStatus && l.error.includes(String(l.httpStatus)))) ||
+                  l.redirectedTo) && (
                   <p className="truncate text-xs text-muted-foreground">
-                    {l.error}{l.redirectedTo && ` → ${l.redirectedTo}`}
+                    {l.error && !(l.httpStatus && l.error.includes(String(l.httpStatus)))
+                      ? l.error
+                      : null}
+                    {l.redirectedTo && ` → ${l.redirectedTo}`}
                   </p>
                 )}
+                {/* Where this link lives, and a jump straight to it. */}
+                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                  {l.section && (
+                    <span className="text-muted-foreground">
+                      Section: <span className="text-foreground">{l.section}</span>
+                    </span>
+                  )}
+                  {l.paragraphIndex != null && (
+                    <span className="text-muted-foreground">Paragraph {l.paragraphIndex + 1}</span>
+                  )}
+                  {l.locateUrl && (
+                    <a
+                      href={l.locateUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="font-medium text-primary hover:underline"
+                      title="Open the audited page scrolled to this link"
+                    >
+                      Find on page <ExternalLink className="inline size-3" />
+                    </a>
+                  )}
+                </div>
               </div>
               {l.httpStatus && (
-                <code className="shrink-0 rounded bg-secondary px-1.5 py-0.5 text-xs">{l.httpStatus}</code>
+                <code
+                  className={cn(
+                    "shrink-0 rounded px-1.5 py-0.5 text-xs",
+                    l.httpStatus >= 400 ? "bg-destructive/15 text-destructive" : "bg-secondary",
+                  )}
+                  title={l.httpStatus === 403 ? "Blocked for automated checks — open it to confirm by eye" : undefined}
+                >
+                  {l.httpStatus}
+                </code>
               )}
             </div>
           ))}

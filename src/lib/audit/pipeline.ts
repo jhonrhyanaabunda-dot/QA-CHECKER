@@ -53,6 +53,13 @@ export async function* runAudit(
   // Identify the dealership + its main website — the target for verify links.
   const dealership = detectDealership(content);
 
+  // The two LLM passes (grammar enrichment and answering unresolved claims)
+  // dominate the runtime — roughly 20s and 28s — and they are independent of
+  // each other. Run back to back they put an ordinary page at 51s of the 60s
+  // function budget, so a slightly larger one would time out. Started here and
+  // awaited later, they overlap each other and the network-bound work.
+  const llmIssuesPromise = enrichWithLlm(content.paragraphs);
+
   // ── Claim detection (per paragraph) ──────────────────────────────────────
   yield { step: "claims", label: "Detecting factual claims…", progress: 25 };
   const paragraphAudits: ParagraphAudit[] = content.paragraphs.map((text, index) => {
@@ -96,9 +103,10 @@ export async function* runAudit(
   // A warning the verifiers could not settle is useless to a reviewer on its
   // own. Answer those: what the right figure is, and what that rests on.
   yield { step: "answer", label: "Answering unresolved warnings…", progress: 50 };
-  await answerUnresolvedClaims([...verifiedParagraphClaims, ...verifiedPageClaims], {
-    dealerName: dealership?.name,
-  });
+  const answersPromise = answerUnresolvedClaims(
+    [...verifiedParagraphClaims, ...verifiedPageClaims],
+    { dealerName: dealership?.name },
+  );
 
   // ── Links ────────────────────────────────────────────────────────────────
   // Cap at MAX_LINKS so a pathological page (e.g. a wiki with 1000+ links) can't
@@ -114,7 +122,7 @@ export async function* runAudit(
       (capped > 0 ? ` (${capped} beyond the ${MAX_LINKS}-link cap were skipped)` : ""),
     progress: 58,
   };
-  const links = await checkLinks(linksToCheck);
+  const links = await checkLinks(linksToCheck, crawled.finalUrl);
 
   // ── Compliance ───────────────────────────────────────────────────────────
   yield { step: "compliance", label: "Scanning for compliance issues…", progress: 68 };
@@ -126,12 +134,15 @@ export async function* runAudit(
   paragraphAudits.forEach((p, i) => {
     p.issues = perParagraph[i] || [];
   });
-  const llmIssues = await enrichWithLlm(content.paragraphs);
+  const llmIssues = await llmIssuesPromise;
   const contentIssues = [...perParagraph.flat(), ...llmIssues];
 
   // ── Ratings ──────────────────────────────────────────────────────────────
   yield { step: "ratings", label: "Cross-checking Google rating…", progress: 84 };
   const ratings = await checkRatings(content, dealership);
+
+  // Answers mutate the claims in place, so they must land before the rollup.
+  await answersPromise;
 
   // Roll up paragraph statuses now that claims + issues are attached.
   for (const p of paragraphAudits) {
