@@ -77,6 +77,11 @@ export function AuditReport({ audit: initial }: { audit: Audit }) {
           <Button variant="outline" size="sm" onClick={() => window.print()}>
             <Printer /> Print / PDF
           </Button>
+          <a href={`/api/export/${audit.id}?format=md`}>
+            <Button variant="outline" size="sm" title="Full paragraph-by-paragraph review document, including why each paragraph passed">
+              <FileText /> Docs
+            </Button>
+          </a>
           <a href={`/api/export/${audit.id}?format=csv`}>
             <Button variant="outline" size="sm"><FileSpreadsheet /> CSV / Excel</Button>
           </a>
